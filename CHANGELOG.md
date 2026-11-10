@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 (2026-11-10)
+
+### Breaking Changes
+
+- use canonical DN42 database artifacts
+
 ## 0.1.1 (2026-11-10)
 
 ### Fixes

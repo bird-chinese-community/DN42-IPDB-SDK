@@ -1,6 +1,6 @@
 {
   "name": "@birdcc/dn42-ipdb",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Local GeoIP2-compatible DN42 IP intelligence and verified database updates.",
   "homepage": "https://github.com/bird-chinese-community/DN42-IPDB-SDK",
   "bugs": "https://github.com/bird-chinese-community/DN42-IPDB-SDK/issues",
