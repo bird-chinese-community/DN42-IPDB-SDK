@@ -13,11 +13,20 @@ extension, including network types, PTR names, ROA/IRR status and observations.
 ASN lookup reads the release's `asn-index.json`. ASN network types describe
 observed member prefixes; they do not classify an entire autonomous system.
 
+The four database files are `DN42-IPDB-Country.mmdb`, `DN42-IPDB-City.mmdb`,
+`DN42-IPDB-ASN.mmdb` and `DN42-IPDB-Connection-Type.mmdb`. Their declared
+database types are checked before the bundle opens.
+
+Optional `dn42.ptr_hints` records naming candidates separately from GeoFeed
+location fields. Each hint retains its DNS observation time, catalog source
+and matching method. PTR naming evidence does not independently confirm a
+host's location.
+
 Downloads are explicit. They fetch the checksum manifest, verify all four
 MMDBs, both JSON sidecars and the Unicode attribution notice, and activate the
 bundle through an atomic cache pointer. Failed or cancelled downloads leave the previous
 pointer in place. A cache retains the current and previous bundle. SDKs use
-separate language subdirectories under the caller's cache directory.
+separate `<language>/v2` subdirectories under the caller's cache directory.
 
 Country and subdivision names come from ISO data. GeoFeed location claims and
 network observations retain their sources and timestamps. Missing evidence

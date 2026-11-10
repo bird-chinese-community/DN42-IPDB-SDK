@@ -56,9 +56,9 @@ def fixture_server():
                 }
             )
             if state["bad_checksum"]:
-                checksums["city.mmdb"] = "0" * 64
+                checksums["DN42-IPDB-City.mmdb"] = "0" * 64
             return web.json_response(checksums)
-        if state["stall"] and name == "city.mmdb":
+        if state["stall"] and name == "DN42-IPDB-City.mmdb":
             await asyncio.sleep(10)
         data = files.get(name)
         return web.Response(body=data) if data is not None else web.Response(status=404)
@@ -83,6 +83,20 @@ def fixture_server():
         loop.call_soon_threadsafe(loop.stop)
         thread.join(5)
         loop.close()
+
+
+def test_v2_cache_initialization(tmp_path):
+    language = tmp_path / "python"
+    language.mkdir()
+    existing = language / "current.json"
+    existing.write_text("existing cache layout")
+    with fixture_server() as (address, _):
+        result = asyncio.run(download_release(tmp_path, base_url=address))
+    assert result["changed"]
+    assert Path(result["directory"]).parent == language / "v2"
+    assert existing.read_text() == "existing cache layout"
+    with open_cached_bundle(tmp_path) as database:
+        assert lookup_asn(database, 4242420001)["asn"] == 4242420001
 
 
 def test_local_lookup():
@@ -135,7 +149,7 @@ def test_reject_insecure_redirect_before_request(tmp_path):
 def test_update_failures_preserve_pointer(tmp_path):
     with fixture_server() as (url, state):
         asyncio.run(download_release(tmp_path, base_url=url))
-        pointer = tmp_path / "python/current.json"
+        pointer = tmp_path / "python/v2/current.json"
         original = pointer.read_bytes()
         state["files"]["metadata.json"] = json.dumps(
             {
@@ -145,12 +159,12 @@ def test_update_failures_preserve_pointer(tmp_path):
                 "revision": 1,
             }
         ).encode()
-        state["failure"] = "asn.mmdb"
+        state["failure"] = "DN42-IPDB-ASN.mmdb"
         with pytest.raises(httpx.HTTPStatusError, match="503"):
             asyncio.run(download_release(tmp_path, base_url=url))
         assert pointer.read_bytes() == original
         state["failure"] = ""
-        state["files"]["city.mmdb"] = state["files"]["asn.mmdb"]
+        state["files"]["DN42-IPDB-City.mmdb"] = state["files"]["DN42-IPDB-ASN.mmdb"]
         with pytest.raises(ValueError, match="expected.*City"):
             asyncio.run(download_release(tmp_path, base_url=url))
         assert pointer.read_bytes() == original
@@ -178,13 +192,13 @@ def test_cancel_before_publication(tmp_path):
                 await task
 
         asyncio.run(run())
-        assert not (tmp_path / "python/current.json").exists()
+        assert not (tmp_path / "python/v2/current.json").exists()
 
 
 def test_retention_with_loaded_reader(tmp_path):
     with fixture_server() as (url, state):
         first = asyncio.run(download_release(tmp_path, base_url=url))
-        custom = tmp_path / "python" / ("f" * 64)
+        custom = tmp_path / "python" / "v2" / ("f" * 64)
         custom.mkdir()
         (custom / "user.txt").write_text("keep")
         with open_cached_bundle(tmp_path) as database:
@@ -211,7 +225,7 @@ def test_retention_with_loaded_reader(tmp_path):
             len(
                 [
                     entry
-                    for entry in (tmp_path / "python").iterdir()
+                    for entry in (tmp_path / "python/v2").iterdir()
                     if len(entry.name) == 64
                 ]
             )
@@ -226,7 +240,7 @@ def test_cross_process_lock(tmp_path):
             [
                 sys.executable,
                 str(Path(__file__).with_name("hold_lock.py")),
-                str(tmp_path / "python"),
+                str(tmp_path / "python/v2"),
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -246,7 +260,7 @@ def test_cross_process_lock(tmp_path):
 def test_recover_malformed_pointer(tmp_path):
     with fixture_server() as (url, _):
         asyncio.run(download_release(tmp_path, base_url=url))
-        (tmp_path / "python/current.json").write_text("{")
+        (tmp_path / "python/v2/current.json").write_text("{")
         result = asyncio.run(download_release(tmp_path, base_url=url))
         assert result["changed"] is True
         assert result["recovered_cache"] is True

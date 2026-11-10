@@ -26,6 +26,6 @@ the release JSON metadata. Each IP match contains `prefix_length` and `data`.
 `Download` accepts a caller context, HTTPS `BaseURL`, and `Timeout` (default
 30 seconds). Loopback HTTP is accepted for tests. Each database or JSON
 sidecar is limited to 32 MiB and the checksum manifest to 64 KiB. The Go cache
-lives under `CacheDir/go` and retains the current and previous bundle.
+lives under `CacheDir/go/v2` and retains the current and previous bundle.
 
 Copyright 2026 BIRD Chinese Community. MIT license.

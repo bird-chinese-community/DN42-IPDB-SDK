@@ -16,14 +16,39 @@ use tempfile::TempDir;
 use tiny_http::{Header, Response, Server, StatusCode};
 
 const FILES: [&str; 7] = [
-    "country.mmdb",
-    "city.mmdb",
-    "asn.mmdb",
-    "connection-type.mmdb",
+    "DN42-IPDB-Country.mmdb",
+    "DN42-IPDB-City.mmdb",
+    "DN42-IPDB-ASN.mmdb",
+    "DN42-IPDB-Connection-Type.mmdb",
     "asn-index.json",
     "metadata.json",
     "LICENSE-Unicode.txt",
 ];
+
+#[test]
+fn initializes_v2_beside_an_existing_language_cache() {
+    let root = TempDir::new().unwrap();
+    let language = root.path().join("rust");
+    fs::create_dir_all(&language).unwrap();
+    let existing = language.join("current.json");
+    fs::write(&existing, "existing cache layout").unwrap();
+    let server = ReleaseServer::start();
+    let cache = Cache::with_url(root.path(), &server.url).unwrap();
+    let update = cache.refresh().unwrap();
+    assert!(update.changed);
+    assert_eq!(update.directory.parent().unwrap(), language.join("v2"));
+    assert_eq!(
+        fs::read_to_string(existing).unwrap(),
+        "existing cache layout"
+    );
+    assert!(
+        cache
+            .open_cached()
+            .unwrap()
+            .lookup_asn(4242420001)
+            .is_some()
+    );
+}
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data")
@@ -81,7 +106,7 @@ impl ReleaseServer {
                 metadata["test_revision"] = json!(state.revision);
                 data.insert("metadata.json", serde_json::to_vec(&metadata).unwrap());
                 if state.wrong_asn_type {
-                    data.insert("asn.mmdb", data["country.mmdb"].clone());
+                    data.insert("DN42-IPDB-ASN.mmdb", data["DN42-IPDB-Country.mmdb"].clone());
                 }
                 let hashes: BTreeMap<_, _> = data
                     .iter()
@@ -94,7 +119,7 @@ impl ReleaseServer {
                     fs::remove_file(pointer).unwrap();
                     fs::create_dir(pointer).unwrap();
                 }
-                if name == "city.mmdb" {
+                if name == "DN42-IPDB-City.mmdb" {
                     if let Some(cancellation) = &state.cancel_city {
                         cancellation.cancel();
                     }
@@ -117,7 +142,7 @@ impl ReleaseServer {
                         .respond(Response::from_data(serde_json::to_vec(&hashes).unwrap()))
                         .unwrap();
                 } else if let Some(bytes) = data.get(name) {
-                    let bytes = if name == "city.mmdb" && state.corrupt_city {
+                    let bytes = if name == "DN42-IPDB-City.mmdb" && state.corrupt_city {
                         b"corrupt".to_vec()
                     } else {
                         bytes.clone()
@@ -204,8 +229,8 @@ fn reads_ipv4_ipv6_and_asn_contract() {
 fn rejects_wrong_database_and_sidecar_schema() {
     let directory = fixture_copy();
     fs::copy(
-        directory.path().join("country.mmdb"),
-        directory.path().join("asn.mmdb"),
+        directory.path().join("DN42-IPDB-Country.mmdb"),
+        directory.path().join("DN42-IPDB-ASN.mmdb"),
     )
     .unwrap();
     assert!(Bundle::open(directory.path()).is_err());
@@ -256,7 +281,7 @@ fn failed_and_cancelled_downloads_preserve_the_active_pointer() {
     let root = tempfile::tempdir().unwrap();
     let cache = Cache::with_url(root.path(), &server.url).unwrap();
     let initial = cache.refresh().unwrap();
-    let pointer_path = root.path().join("rust/current.json");
+    let pointer_path = root.path().join("rust/v2/current.json");
     let pointer = fs::read(&pointer_path).unwrap();
     for mode in 0..5 {
         {
@@ -264,7 +289,7 @@ fn failed_and_cancelled_downloads_preserve_the_active_pointer() {
             state.revision += 1;
             state.corrupt_city = mode == 0;
             state.wrong_asn_type = mode == 1;
-            state.missing_file = (mode == 2).then(|| "asn.mmdb".to_string());
+            state.missing_file = (mode == 2).then(|| "DN42-IPDB-ASN.mmdb".to_string());
             state.redirect_city = mode == 3;
             state.cancel_city = None;
         }
@@ -298,7 +323,7 @@ fn failed_activation_removes_its_new_version_directory() {
     let root = tempfile::tempdir().unwrap();
     let cache = Cache::with_url(root.path(), &server.url).unwrap();
     let initial = cache.refresh().unwrap();
-    let pointer = root.path().join("rust/current.json");
+    let pointer = root.path().join("rust/v2/current.json");
     {
         let mut state = server.state.lock().unwrap();
         state.revision = 1;
@@ -308,7 +333,7 @@ fn failed_activation_removes_its_new_version_directory() {
     assert!(pointer.is_dir());
     assert!(initial.directory.is_dir());
     assert!(initial.bundle.lookup_asn(4_242_420_001).is_some());
-    let directories: Vec<_> = fs::read_dir(root.path().join("rust"))
+    let directories: Vec<_> = fs::read_dir(root.path().join("rust/v2"))
         .unwrap()
         .map(|entry| entry.unwrap())
         .filter(|entry| entry.file_type().unwrap().is_dir())
@@ -323,14 +348,14 @@ fn successive_updates_retain_two_bundles_and_preserve_custom_directories() {
     let root = tempfile::tempdir().unwrap();
     let cache = Cache::with_url(root.path(), &server.url).unwrap();
     let initial = cache.refresh().unwrap();
-    let custom = root.path().join("rust").join("a".repeat(64));
+    let custom = root.path().join("rust/v2").join("a".repeat(64));
     fs::create_dir(&custom).unwrap();
     fs::write(custom.join("user.txt"), b"retain").unwrap();
     for revision in 1..4 {
         server.state.lock().unwrap().revision = revision;
         assert!(cache.refresh().unwrap().changed);
     }
-    let owned = fs::read_dir(root.path().join("rust"))
+    let owned = fs::read_dir(root.path().join("rust/v2"))
         .unwrap()
         .filter_map(|entry| {
             let entry = entry.unwrap();
@@ -382,7 +407,7 @@ fn cached_reads_and_updates_obey_the_same_cross_process_lock() {
         .unwrap()
         .with_timeout(Duration::from_millis(100))
         .unwrap();
-    let directory = root.path().join("rust");
+    let directory = root.path().join("rust/v2");
     let _child = ChildGuard(
         Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "lock_holder_helper", "--nocapture"])

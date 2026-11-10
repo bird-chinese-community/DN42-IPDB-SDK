@@ -28,11 +28,11 @@ const DefaultReleaseURL = "https://github.com/bird-chinese-community/DN42-IPDB-R
 const MaxDatabaseBytes = 32 << 20
 const MaxManifestBytes = 64 << 10
 
-var artifacts = []struct{ key, file, kind, legacy string }{
-	{"country", "country.mmdb", "DN42-GeoIP2-Country", "DN42-Country"},
-	{"city", "city.mmdb", "DN42-GeoIP2-City", "DN42-City"},
-	{"asn", "asn.mmdb", "DN42-GeoLite2-ASN", "DN42-ASN"},
-	{"connection_type", "connection-type.mmdb", "DN42-GeoIP2-Connection-Type", "DN42-Connection-Type"},
+var artifacts = []struct{ key, file, kind string }{
+	{"country", "DN42-IPDB-Country.mmdb", "DN42-GeoIP2-Country"},
+	{"city", "DN42-IPDB-City.mmdb", "DN42-GeoIP2-City"},
+	{"asn", "DN42-IPDB-ASN.mmdb", "DN42-GeoLite2-ASN"},
+	{"connection_type", "DN42-IPDB-Connection-Type.mmdb", "DN42-GeoIP2-Connection-Type"},
 }
 var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var sidecars = []string{"asn-index.json", "metadata.json", "LICENSE-Unicode.txt"}
@@ -103,7 +103,7 @@ func Open(directory string) (*Database, error) {
 			_ = db.Close()
 			return nil, fmt.Errorf("decode %s: %w", artifact.file, err)
 		}
-		if reader.Metadata.DatabaseType != artifact.kind && reader.Metadata.DatabaseType != artifact.legacy {
+		if reader.Metadata.DatabaseType != artifact.kind {
 			_ = reader.Close()
 			_ = db.Close()
 			return nil, fmt.Errorf("%s: expected %s database", artifact.file, artifact.kind)
@@ -182,7 +182,7 @@ type pointer struct {
 }
 
 func OpenCached(cacheDir string) (*Database, error) {
-	cache := filepath.Join(cacheDir, "go")
+	cache := filepath.Join(cacheDir, "go", "v2")
 	guard := flock.New(filepath.Join(cache, ".update.lock"))
 	locked, err := guard.TryLock()
 	if err != nil {
@@ -216,7 +216,7 @@ func OpenCached(cacheDir string) (*Database, error) {
 }
 
 // Download verifies a complete release before replacing the cache pointer.
-// The Go cache occupies CacheDir/go and retains the current and previous version.
+// The Go cache occupies CacheDir/go/v2 and retains the current and previous version.
 func Download(ctx context.Context, options DownloadOptions) (DownloadResult, error) {
 	if options.CacheDir == "" {
 		return DownloadResult{}, errors.New("CacheDir is required")
@@ -251,7 +251,7 @@ func Download(ctx context.Context, options DownloadOptions) (DownloadResult, err
 		}
 		return nil
 	}}
-	cache := filepath.Join(options.CacheDir, "go")
+	cache := filepath.Join(options.CacheDir, "go", "v2")
 	if err := os.MkdirAll(cache, 0o700); err != nil {
 		return DownloadResult{}, err
 	}

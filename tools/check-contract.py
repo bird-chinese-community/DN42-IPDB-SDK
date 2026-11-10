@@ -4,10 +4,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
-    "country.mmdb",
-    "city.mmdb",
-    "asn.mmdb",
-    "connection-type.mmdb",
+    "DN42-IPDB-Country.mmdb",
+    "DN42-IPDB-City.mmdb",
+    "DN42-IPDB-ASN.mmdb",
+    "DN42-IPDB-Connection-Type.mmdb",
     "asn-index.json",
     "metadata.json",
     "LICENSE-Unicode.txt",

@@ -11,10 +11,10 @@ import { downloadRelease, openBundle, openCachedBundle } from "../src/index.ts";
 
 const fixtures = fileURLToPath(new URL("../../testdata/", import.meta.url));
 const files = [
-  "country.mmdb",
-  "city.mmdb",
-  "asn.mmdb",
-  "connection-type.mmdb",
+  "DN42-IPDB-Country.mmdb",
+  "DN42-IPDB-City.mmdb",
+  "DN42-IPDB-ASN.mmdb",
+  "DN42-IPDB-Connection-Type.mmdb",
   "asn-index.json",
   "metadata.json",
   "LICENSE-Unicode.txt",
@@ -47,7 +47,7 @@ async function fixtureServer() {
       response.writeHead(503).end();
       return;
     }
-    if (stalled && file === "city.mmdb") {
+    if (stalled && file === "DN42-IPDB-City.mmdb") {
       response.writeHead(200);
       response.flushHeaders();
       return;
@@ -61,7 +61,7 @@ async function fixtureServer() {
               createHash("sha256").update(data).digest("hex"),
             ]),
           );
-      if (invalidChecksum) manifest["city.mmdb"] = "0".repeat(64);
+      if (invalidChecksum) manifest["DN42-IPDB-City.mmdb"] = "0".repeat(64);
       response.end(JSON.stringify(manifest));
       return;
     }
@@ -144,6 +144,26 @@ await test("rejects a redirect before requesting an insecure target", async () =
   }
 });
 
+await test("initializes v2 beside an existing language cache", async () => {
+  const server = await fixtureServer();
+  const cacheDir = await mkdtemp(join(scratch, "layout-"));
+  const existing = join(cacheDir, "typescript", "current.json");
+  await mkdir(join(cacheDir, "typescript"));
+  await writeFile(existing, "existing cache layout");
+  try {
+    const result = await downloadRelease({ cacheDir, baseURL: server.baseURL });
+    assert.equal(result.changed, true);
+    assert.equal(join(result.directory, ".."), join(cacheDir, "typescript", "v2"));
+    assert.equal(await readFile(existing, "utf8"), "existing cache layout");
+    const database = await openCachedBundle(cacheDir);
+    assert.equal(database.lookupAsn(4242420001)?.asn, 4242420001);
+    database.close();
+  } finally {
+    await server.close();
+    await rm(cacheDir, { recursive: true });
+  }
+});
+
 await test("downloads a complete verified bundle and reuses it without database requests", async () => {
   const server = await fixtureServer();
   const cacheDir = await mkdtemp(join(scratch, "cache-"));
@@ -170,7 +190,7 @@ await test("preserves the active bundle after partial downloads, wrong types and
   const cacheDir = await mkdtemp(join(scratch, "failure-"));
   try {
     await downloadRelease({ cacheDir, baseURL: server.baseURL });
-    const pointer = join(cacheDir, "typescript/current.json");
+    const pointer = join(cacheDir, "typescript/v2/current.json");
     const original = await readFile(pointer, "utf8");
     server.bytes.set(
       "metadata.json",
@@ -183,11 +203,14 @@ await test("preserves the active bundle after partial downloads, wrong types and
         }),
       ),
     );
-    server.fail("asn.mmdb");
+    server.fail("DN42-IPDB-ASN.mmdb");
     await assert.rejects(downloadRelease({ cacheDir, baseURL: server.baseURL }), /503/);
     assert.equal(await readFile(pointer, "utf8"), original);
     server.fail();
-    server.bytes.set("city.mmdb", await readFile(join(fixtures, "asn.mmdb")));
+    server.bytes.set(
+      "DN42-IPDB-City.mmdb",
+      await readFile(join(fixtures, "DN42-IPDB-ASN.mmdb")),
+    );
     await assert.rejects(
       downloadRelease({ cacheDir, baseURL: server.baseURL }),
       /expected.*City/,
@@ -222,7 +245,7 @@ await test("cancels a streamed download before publishing the cache pointer", as
       downloadRelease({ cacheDir, baseURL: server.baseURL, signal: controller.signal }),
     );
     assert.equal(
-      (await readdir(join(cacheDir, "typescript"))).includes("current.json"),
+      (await readdir(join(cacheDir, "typescript", "v2"))).includes("current.json"),
       false,
     );
   } finally {
@@ -238,7 +261,7 @@ await test("retains two owned versions and preserves custom cache content", asyn
   try {
     const first = await downloadRelease({ cacheDir, baseURL: server.baseURL });
     const reader = await openCachedBundle(cacheDir);
-    const custom = join(cacheDir, "typescript", "f".repeat(64));
+    const custom = join(cacheDir, "typescript", "v2", "f".repeat(64));
     await mkdir(custom);
     await writeFile(join(custom, "user-data.txt"), "keep");
     for (const revision of [1, 2, 3]) {
@@ -255,10 +278,10 @@ await test("retains two owned versions and preserves custom cache content", asyn
       );
       await downloadRelease({ cacheDir, baseURL: server.baseURL });
     }
-    const entries = await readdir(join(cacheDir, "typescript"));
+    const entries = await readdir(join(cacheDir, "typescript", "v2"));
     assert.equal(entries.filter((entry) => /^[0-9a-f]{64}$/.test(entry)).length, 3);
     assert.equal(await readFile(join(custom, "user-data.txt"), "utf8"), "keep");
-    await assert.rejects(readFile(join(first.directory, "city.mmdb")), {
+    await assert.rejects(readFile(join(first.directory, "DN42-IPDB-City.mmdb")), {
       code: "ENOENT",
     });
     assert.equal(reader.lookupAsn(4242420001)?.asn, 4242420001);
@@ -279,7 +302,7 @@ await test("cached readers and updates honor the cross-process update lock", asy
   try {
     await downloadRelease({ cacheDir, baseURL: server.baseURL });
     const child = fork(fileURLToPath(new URL("./hold-lock.mjs", import.meta.url)), [
-      join(cacheDir, "typescript"),
+      join(cacheDir, "typescript", "v2"),
     ]);
     try {
       await once(child, "message");
@@ -305,7 +328,7 @@ await test("recovers a malformed cache pointer after a complete verified downloa
   const cacheDir = await mkdtemp(join(scratch, "recovery-"));
   try {
     await downloadRelease({ cacheDir, baseURL: server.baseURL });
-    await writeFile(join(cacheDir, "typescript/current.json"), "{");
+    await writeFile(join(cacheDir, "typescript/v2/current.json"), "{");
     const result = await downloadRelease({ cacheDir, baseURL: server.baseURL });
     assert.equal(result.changed, true);
     assert.equal(result.recoveredCache, true);

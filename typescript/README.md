@@ -22,11 +22,13 @@ database.close();
 request. `openBundle(directory)` reads an existing release. Lookups are
 synchronous and local after opening. Each matched record includes
 `prefix_length` and `data`. `metadata()` returns the MMDB metadata by database.
+The optional `data.dn42.ptr_hints` property is typed as `PtrHints` and preserves
+candidate cities, matching methods and DNS/catalog provenance.
 
 `downloadRelease` accepts `baseURL`, `timeoutMs` and `signal`. It permits HTTPS
 mirrors and loopback HTTP for tests. The default update timeout is 30 seconds.
 Each database or JSON sidecar is limited to 32 MiB, and the checksum manifest
-to 64 KiB. The TypeScript cache lives under `cacheDir/typescript`.
+to 64 KiB. The TypeScript cache lives under `cacheDir/typescript/v2`.
 
 Consumers that require an HTTP proxy can configure their fetch dispatcher
 with a compatible Undici `ProxyAgent` before calling `downloadRelease`.

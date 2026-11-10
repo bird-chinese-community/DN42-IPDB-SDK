@@ -23,13 +23,12 @@ DEFAULT_RELEASE_URL = "https://github.com/bird-chinese-community/DN42-IPDB-Relea
 MAX_DATABASE_BYTES = 32 * 1024 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
 ARTIFACT_TYPES = {
-    "country": ("country.mmdb", "DN42-GeoIP2-Country", "DN42-Country"),
-    "city": ("city.mmdb", "DN42-GeoIP2-City", "DN42-City"),
-    "asn": ("asn.mmdb", "DN42-GeoLite2-ASN", "DN42-ASN"),
+    "country": ("DN42-IPDB-Country.mmdb", "DN42-GeoIP2-Country"),
+    "city": ("DN42-IPDB-City.mmdb", "DN42-GeoIP2-City"),
+    "asn": ("DN42-IPDB-ASN.mmdb", "DN42-GeoLite2-ASN"),
     "connection_type": (
-        "connection-type.mmdb",
+        "DN42-IPDB-Connection-Type.mmdb",
         "DN42-GeoIP2-Connection-Type",
-        "DN42-Connection-Type",
     ),
 }
 ARTIFACT_FILES = [item[0] for item in ARTIFACT_TYPES.values()] + [
@@ -71,11 +70,11 @@ def open_bundle(directory: str | Path) -> Iterator[Bundle]:
         raise ValueError("Invalid release metadata")
     readers = {}
     try:
-        for key, (filename, kind, legacy) in ARTIFACT_TYPES.items():
+        for key, (filename, kind) in ARTIFACT_TYPES.items():
             data = _read_bounded(path / filename, MAX_DATABASE_BYTES)
             reader = maxminddb.open_database(BytesIO(data), mode=maxminddb.MODE_FD)
             readers[key] = reader
-            if reader.metadata().database_type not in {kind, legacy}:
+            if reader.metadata().database_type != kind:
                 raise ValueError(f"{filename}: expected {kind} database")
         yield readers, index["asns"], release
     finally:
@@ -156,7 +155,7 @@ def _read_pointer(cache: Path) -> tuple[str, dict[str, str]] | None:
 @contextmanager
 def open_cached_bundle(cache_dir: str | Path) -> Iterator[Bundle]:
     """Read the verified current cache without network activity."""
-    cache = Path(cache_dir) / "python"
+    cache = Path(cache_dir) / "python" / "v2"
     with ExitStack() as stack:
         with FileLock(cache / ".update.lock", timeout=0):
             pointer = _read_pointer(cache)
@@ -217,7 +216,7 @@ async def download_release(
     base_url: str = DEFAULT_RELEASE_URL,
     timeout: float = 30,
 ) -> Record:
-    """Verify seven files before activating a bundle in cache_dir/python."""
+    """Verify seven files before activating a bundle in cache_dir/python/v2."""
     if not cache_dir:
         raise ValueError("cache_dir is required")
     base = urlsplit(base_url)
@@ -231,7 +230,7 @@ async def download_release(
         raise ValueError("Release URL requires HTTPS or loopback HTTP")
     if not base_url.endswith("/"):
         base_url += "/"
-    cache = Path(cache_dir) / "python"
+    cache = Path(cache_dir) / "python" / "v2"
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     async with (
         asyncio.timeout(timeout),
