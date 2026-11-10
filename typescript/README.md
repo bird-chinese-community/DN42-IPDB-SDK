@@ -1,5 +1,8 @@
 # @birdcc/dn42-ipdb
 
+Requires Node.js 20.18.3 or newer. Development checks use Node.js 24; the
+compiled contract tests also run on the minimum supported runtime.
+
 ```sh
 npm install @birdcc/dn42-ipdb
 ```
@@ -24,5 +27,8 @@ synchronous and local after opening. Each matched record includes
 mirrors and loopback HTTP for tests. The default update timeout is 30 seconds.
 Each database or JSON sidecar is limited to 32 MiB, and the checksum manifest
 to 64 KiB. The TypeScript cache lives under `cacheDir/typescript`.
+
+Consumers that require an HTTP proxy can configure their fetch dispatcher
+with a compatible Undici `ProxyAgent` before calling `downloadRelease`.
 
 Copyright 2026 BIRD Chinese Community. MIT license.

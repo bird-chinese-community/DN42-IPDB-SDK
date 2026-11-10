@@ -15,6 +15,31 @@ permissions:
   contents: read
 
 jobs:
+  minimum-node:
+    name: Node.js 20.18.3 runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TMPDIR: ${{ github.workspace }}/.cache/tmp
+      GOTMPDIR: ${{ github.workspace }}/.cache/tmp
+      TMP: ${{ github.workspace }}/.cache/tmp
+      TEMP: ${{ github.workspace }}/.cache/tmp
+      CARGO_BUILD_JOBS: 2
+      GOMAXPROCS: 2
+      NODE_OPTIONS: --max-old-space-size=2048
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - run: mkdir -p .cache/tmp
+      - uses: ./.github/actions/setup
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: bash tools/prepare-typescript-tests.sh
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 20.18.3
+      - run: node --test .cache/typescript-runtime-tests/typescript/test/*.test.js
+
   sdk:
     name: SDK (${{ matrix.os }})
     strategy:
