@@ -29,7 +29,7 @@ unknown ASNs return `None`.
 Loopback HTTP is accepted for tests. The default timeout is 30 seconds and
 task cancellation stops pending downloads. Each database or JSON sidecar is
 limited to 32 MiB; the checksum manifest to 64 KiB. The Python cache lives
-under `cache_dir/python`.
+under `cache_dir/python/v2`.
 
 The SDK reads verified bytes with MaxMind's pure Python `MODE_FD` reader.
 The official `geoip2` typed reader also supports the bundle. Use its memory
@@ -39,7 +39,7 @@ mode on Windows with `maxminddb` 3.2.0:
 from geoip2.database import Reader
 from maxminddb import MODE_MEMORY
 
-with Reader("asn.mmdb", mode=MODE_MEMORY) as database:
+with Reader("DN42-IPDB-ASN.mmdb", mode=MODE_MEMORY) as database:
     print(database.asn("172.23.33.0").autonomous_system_number)
 ```
 

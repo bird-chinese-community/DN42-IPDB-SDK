@@ -45,7 +45,7 @@ func fixtureServer(t *testing.T, files map[string][]byte, requests *int, failure
 				checksums[name] = checksum(data)
 			}
 			if *failure == "checksum" {
-				checksums["city.mmdb"] = strings.Repeat("0", 64)
+				checksums["DN42-IPDB-City.mmdb"] = strings.Repeat("0", 64)
 			}
 			if err := json.NewEncoder(w).Encode(checksums); err != nil {
 				t.Error(err)
@@ -134,18 +134,18 @@ func TestDownloadReuseAndFailures(t *testing.T) {
 	if requests != 9 {
 		t.Fatal("local lookup made a request")
 	}
-	pointerPath := filepath.Join(options.CacheDir, "go", "current.json")
+	pointerPath := filepath.Join(options.CacheDir, "go", "v2", "current.json")
 	original, err := os.ReadFile(pointerPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	files["metadata.json"] = []byte(`{"schema_version":"2","release_repository":"test","copyright":"BIRDCC","revision":1}`)
-	failure = "asn.mmdb"
+	failure = "DN42-IPDB-ASN.mmdb"
 	if _, err := Download(context.Background(), options); err == nil {
 		t.Fatal("partial download accepted")
 	}
 	failure = ""
-	files["city.mmdb"] = files["asn.mmdb"]
+	files["DN42-IPDB-City.mmdb"] = files["DN42-IPDB-ASN.mmdb"]
 	if _, err := Download(context.Background(), options); err == nil || !strings.Contains(err.Error(), "City") {
 		t.Fatalf("wrong database accepted: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestCancellation(t *testing.T) {
 	if _, err := Download(ctx, DownloadOptions{CacheDir: cache, BaseURL: server.URL}); err == nil {
 		t.Fatal("cancelled download succeeded")
 	}
-	if _, err := os.Stat(filepath.Join(cache, "go", "current.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(cache, "go", "v2", "current.json")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected pointer: %v", err)
 	}
 }
@@ -201,7 +201,7 @@ func TestRetentionAndIndependentReaders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	custom := filepath.Join(options.CacheDir, "go", strings.Repeat("f", 64))
+	custom := filepath.Join(options.CacheDir, "go", "v2", strings.Repeat("f", 64))
 	if err := os.Mkdir(custom, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestRetentionAndIndependentReaders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entries, err := os.ReadDir(filepath.Join(options.CacheDir, "go"))
+	entries, err := os.ReadDir(filepath.Join(options.CacheDir, "go", "v2"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestCrossProcessLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	child := exec.Command(executable, "-test.run=^TestHoldCacheLock$")
-	child.Env = append(os.Environ(), "DN42_LOCK_CACHE="+filepath.Join(options.CacheDir, "go"))
+	child.Env = append(os.Environ(), "DN42_LOCK_CACHE="+filepath.Join(options.CacheDir, "go", "v2"))
 	stdout, err := child.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -295,6 +295,37 @@ func TestCrossProcessLock(t *testing.T) {
 	}
 }
 
+func TestV2CacheInitialization(t *testing.T) {
+	files := fixtureFiles(t)
+	requests, failure := 0, ""
+	server := fixtureServer(t, files, &requests, &failure)
+	options := DownloadOptions{CacheDir: t.TempDir(), BaseURL: server.URL}
+	language := filepath.Join(options.CacheDir, "go")
+	if err := os.MkdirAll(language, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	existing := filepath.Join(language, "current.json")
+	if err := os.WriteFile(existing, []byte("existing cache layout"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Download(context.Background(), options)
+	if err != nil || !result.Changed || filepath.Dir(result.Directory) != filepath.Join(language, "v2") {
+		t.Fatalf("v2 activation: %#v, %v", result, err)
+	}
+	data, err := os.ReadFile(existing)
+	if err != nil || string(data) != "existing cache layout" {
+		t.Fatalf("existing cache: %q, %v", data, err)
+	}
+	db, err := OpenCached(options.CacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, found := db.LookupASN(4242420001); !found {
+		t.Fatal("new cache index missing")
+	}
+}
+
 func TestRecoverMalformedPointer(t *testing.T) {
 	files := fixtureFiles(t)
 	requests, failure := 0, ""
@@ -303,7 +334,7 @@ func TestRecoverMalformedPointer(t *testing.T) {
 	if _, err := Download(context.Background(), options); err != nil {
 		t.Fatal(err)
 	}
-	pointerPath := filepath.Join(options.CacheDir, "go", "current.json")
+	pointerPath := filepath.Join(options.CacheDir, "go", "v2", "current.json")
 	if err := os.WriteFile(pointerPath, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}

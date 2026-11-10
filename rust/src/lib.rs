@@ -26,28 +26,22 @@ pub const MAX_DATABASE_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const FILES: [&str; 7] = [
-    "country.mmdb",
-    "city.mmdb",
-    "asn.mmdb",
-    "connection-type.mmdb",
+    "DN42-IPDB-Country.mmdb",
+    "DN42-IPDB-City.mmdb",
+    "DN42-IPDB-ASN.mmdb",
+    "DN42-IPDB-Connection-Type.mmdb",
     "asn-index.json",
     "metadata.json",
     "LICENSE-Unicode.txt",
 ];
-const DATABASES: [(&str, &str, &str, &str); 4] = [
-    (
-        "country",
-        "country.mmdb",
-        "DN42-GeoIP2-Country",
-        "DN42-Country",
-    ),
-    ("city", "city.mmdb", "DN42-GeoIP2-City", "DN42-City"),
-    ("asn", "asn.mmdb", "DN42-GeoLite2-ASN", "DN42-ASN"),
+const DATABASES: [(&str, &str, &str); 4] = [
+    ("country", "DN42-IPDB-Country.mmdb", "DN42-GeoIP2-Country"),
+    ("city", "DN42-IPDB-City.mmdb", "DN42-GeoIP2-City"),
+    ("asn", "DN42-IPDB-ASN.mmdb", "DN42-GeoLite2-ASN"),
     (
         "connection_type",
-        "connection-type.mmdb",
+        "DN42-IPDB-Connection-Type.mmdb",
         "DN42-GeoIP2-Connection-Type",
-        "DN42-Connection-Type",
     ),
 ];
 
@@ -162,12 +156,10 @@ impl Bundle {
             ));
         }
         let mut readers = BTreeMap::new();
-        for (key, file, expected, legacy) in DATABASES {
+        for (key, file, expected) in DATABASES {
             let reader =
                 Reader::from_source(read_bounded(&directory.join(file), MAX_DATABASE_BYTES)?)?;
-            if reader.metadata().database_type != expected
-                && reader.metadata().database_type != legacy
-            {
+            if reader.metadata().database_type != expected {
                 return Err(Error::Invalid(format!(
                     "{file}: expected {expected} database"
                 )));
@@ -261,7 +253,7 @@ pub struct Update {
     pub bundle: Bundle,
 }
 
-/// Explicit updates use cache_root/rust and retain the current and previous bundle.
+/// Explicit updates use cache_root/rust/v2 and retain the current and previous bundle.
 pub struct Cache {
     directory: PathBuf,
     base_url: Url,
@@ -284,7 +276,7 @@ impl Cache {
             base_url.set_path(&format!("{}/", base_url.path()));
         }
         Ok(Self {
-            directory: cache_root.as_ref().join("rust"),
+            directory: cache_root.as_ref().join("rust").join("v2"),
             base_url,
             timeout: TIMEOUT,
         })

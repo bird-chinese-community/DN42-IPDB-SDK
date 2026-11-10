@@ -18,14 +18,10 @@ export const defaultReleaseURL =
 const maxDatabaseBytes = 32 * 1024 * 1024;
 const maxManifestBytes = 64 * 1024;
 const artifactTypes = {
-  country: ["country.mmdb", "DN42-GeoIP2-Country", "DN42-Country"],
-  city: ["city.mmdb", "DN42-GeoIP2-City", "DN42-City"],
-  asn: ["asn.mmdb", "DN42-GeoLite2-ASN", "DN42-ASN"],
-  connection_type: [
-    "connection-type.mmdb",
-    "DN42-GeoIP2-Connection-Type",
-    "DN42-Connection-Type",
-  ],
+  country: ["DN42-IPDB-Country.mmdb", "DN42-GeoIP2-Country"],
+  city: ["DN42-IPDB-City.mmdb", "DN42-GeoIP2-City"],
+  asn: ["DN42-IPDB-ASN.mmdb", "DN42-GeoLite2-ASN"],
+  connection_type: ["DN42-IPDB-Connection-Type.mmdb", "DN42-GeoIP2-Connection-Type"],
 } as const;
 const artifactFiles = [
   ...Object.values(artifactTypes).map(([file]) => file),
@@ -37,10 +33,10 @@ type ArtifactKey = keyof typeof artifactTypes;
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const checksumSchema = z
   .object({
-    "country.mmdb": digestSchema,
-    "city.mmdb": digestSchema,
-    "asn.mmdb": digestSchema,
-    "connection-type.mmdb": digestSchema,
+    "DN42-IPDB-Country.mmdb": digestSchema,
+    "DN42-IPDB-City.mmdb": digestSchema,
+    "DN42-IPDB-ASN.mmdb": digestSchema,
+    "DN42-IPDB-Connection-Type.mmdb": digestSchema,
     "asn-index.json": digestSchema,
     "metadata.json": digestSchema,
     "LICENSE-Unicode.txt": digestSchema,
@@ -67,6 +63,44 @@ export interface Evidence {
   authority: string;
   confidence: string;
 }
+export interface PtrCandidate {
+  city_id: string;
+  country: string;
+  city: string;
+  region?: string;
+  matched_token: string;
+  method: string;
+  rank: number;
+  guarded?: boolean;
+}
+export interface PtrNameHint {
+  hostname: string;
+  normalized?: string;
+  stripped_domain?: string;
+  source: string;
+  observed_at: string;
+  observation_method: string;
+  authority: string;
+  status: string;
+  reason?: string;
+  candidates?: PtrCandidate[];
+}
+export interface PtrHints {
+  status: string;
+  reason?: string;
+  algorithm: string;
+  catalog: {
+    version: string;
+    source: string;
+    license: string;
+    revision: string;
+    source_sha256: string;
+    sha256: string;
+    generated_at: string;
+    valid_until: string;
+  };
+  names: PtrNameHint[];
+}
 export interface Dn42Metadata {
   asn?: number;
   as_name?: string;
@@ -77,6 +111,7 @@ export interface Dn42Metadata {
   anycast: string;
   network_types: string[];
   ptr: string[];
+  ptr_hints?: PtrHints;
   roa_status: string;
   irr_status: string;
   roa_prefix?: string;
@@ -174,14 +209,11 @@ export async function openBundle(directory: string): Promise<Bundle> {
     ),
   );
   const readers = new Map<ArtifactKey, Reader<DatabaseRecord>>();
-  for (const [key, [file, kind, legacy]] of Object.entries(artifactTypes)) {
+  for (const [key, [file, kind]] of Object.entries(artifactTypes)) {
     const reader = new Reader<DatabaseRecord>(
       await readBounded(join(directory, file), maxDatabaseBytes),
     );
-    if (
-      reader.metadata.databaseType !== kind &&
-      reader.metadata.databaseType !== legacy
-    )
+    if (reader.metadata.databaseType !== kind)
       throw new Error(`${file}: expected ${kind} database`);
     readers.set(key as ArtifactKey, reader);
   }
@@ -245,7 +277,7 @@ async function verifyFiles(directory: string, checksums: Checksums): Promise<voi
 }
 
 export async function openCachedBundle(cacheDir: string): Promise<Bundle> {
-  const cache = join(cacheDir, "typescript");
+  const cache = join(cacheDir, "typescript", "v2");
   let compromised: Error | undefined;
   const release = await lock(cache, {
     retries: 0,
@@ -345,7 +377,7 @@ export async function downloadRelease(
   if (options.signal) signals.push(options.signal);
   const signal = AbortSignal.any(signals);
   signal.throwIfAborted();
-  const cache = join(options.cacheDir, "typescript");
+  const cache = join(options.cacheDir, "typescript", "v2");
   await mkdir(cache, { recursive: true, mode: 0o700 });
   const release = await lock(cache, {
     retries: 0,

@@ -34,7 +34,7 @@ autonomous system.
 `Cache::new` uses the public release URL. `Cache::with_url` selects another
 HTTPS base URL or an IP-literal loopback HTTP server. `refresh` downloads and
 checks the seven files explicitly. `open_cached` checks and opens the existing
-bundle. The cache uses `cache_root/rust`, an OS file lock for reads and updates,
+bundle. The cache uses `cache_root/rust/v2`, an OS file lock for reads and updates,
 a staged bundle, an atomic pointer, and current/previous version retention.
 Failed downloads preserve the active pointer and already loaded readers.
 
