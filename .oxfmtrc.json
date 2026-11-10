@@ -1,0 +1,19 @@
+{
+  "ignorePatterns": [
+    "**/dist/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/.venv/**",
+    ".cache/**",
+    ".tmp/**",
+    "**/testdata/**",
+    "**/tests/data/**",
+    "rust/Cargo.toml",
+    "**/go.sum",
+    "pnpm-lock.yaml",
+    "**/Cargo.lock",
+    "**/uv.lock"
+  ],
+  "printWidth": 88,
+  "tabWidth": 2
+}

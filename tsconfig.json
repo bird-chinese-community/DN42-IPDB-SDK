@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "types": ["node"],
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
+    "rewriteRelativeImportExtensions": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["typescript/src/**/*.ts", "typescript/test/**/*.ts"],
+  "exclude": ["**/node_modules", "**/dist"]
+}

@@ -1,0 +1,67 @@
+name: Prepare SDK version
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional semantic version override
+        type: string
+        required: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sdk-version
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION_OVERRIDE: ${{ inputs.version }}
+      TMPDIR: ${{ github.workspace }}/.cache/tmp
+      GOTMPDIR: ${{ github.workspace }}/.cache/tmp
+      TMP: ${{ github.workspace }}/.cache/tmp
+      TEMP: ${{ github.workspace }}/.cache/tmp
+      CARGO_BUILD_JOBS: 2
+      GOMAXPROCS: 2
+      NODE_OPTIONS: --max-old-space-size=2048
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - run: mkdir -p .cache/tmp
+      - uses: ./.github/actions/setup
+      - uses: knope-dev/action@19617851f9f13ab2f27a05989c55efb18aca3675 # v2.1.2
+        with:
+          version: 0.23.2
+      - name: Prepare native version manifests
+        id: prepare
+        run: |
+          if ! git describe --tags --match 'v[0-9]*' --abbrev=0 >/dev/null 2>&1 && test -z "$VERSION_OVERRIDE"; then exit 0; fi
+          if test -n "$VERSION_OVERRIDE"; then knope prepare-release --override-version "$VERSION_OVERRIDE"; else knope prepare-release; fi
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm exec oxfmt typescript/package.json
+          uv lock --project python
+          if ! git diff --quiet HEAD; then echo 'changed=true' >> "$GITHUB_OUTPUT"; fi
+      - if: steps.prepare.outputs.changed == 'true'
+        run: bash tools/check.sh
+      - if: steps.prepare.outputs.changed == 'true'
+        name: Commit and dispatch the verified release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(knope get-version)
+          git config user.name 'BIRDCC SDK Releases'
+          git config user.email 'sdk.opensouce@birdcc.link'
+          git add typescript/package.json python/pyproject.toml python/uv.lock rust/Cargo.toml rust/Cargo.lock go/go.mod CHANGELOG.md
+          git commit -m "chore(release): publish $VERSION"
+          git tag "v$VERSION"
+          git push --atomic origin HEAD:main "v$VERSION"
+          gh workflow run release.yml --ref "v$VERSION" -f "tag=v$VERSION"

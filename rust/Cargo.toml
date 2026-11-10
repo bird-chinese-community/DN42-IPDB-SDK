@@ -1,0 +1,29 @@
+[package]
+name = "dn42-ipdb"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+authors = ["BIRD Chinese Community <sdk.opensouce@birdcc.link>"]
+description = "Local GeoIP2-compatible DN42 IP and ASN lookup with verified release updates"
+license = "MIT"
+repository = "https://github.com/bird-chinese-community/DN42-IPDB-SDK"
+homepage = "https://github.com/bird-chinese-community/DN42-IPDB-Releases"
+readme = "README.md"
+keywords = ["dn42", "geoip", "maxmind", "asn", "network"]
+categories = ["network-programming", "database"]
+include = ["src/**", "tests/**", "examples/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
+
+[dependencies]
+maxminddb = "0.32.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls", "system-proxy"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+
+[dev-dependencies]
+tiny_http = "0.12"
+
+[profile.dev]
+debug = 0

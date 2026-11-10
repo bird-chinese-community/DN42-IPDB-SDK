@@ -1,0 +1,19 @@
+{
+  "name": "dn42-ipdb-sdk-workspace",
+  "private": true,
+  "scripts": {
+    "build": "pnpm --dir typescript build",
+    "test": "pnpm --dir typescript test",
+    "lint": "oxlint --type-aware --type-check --deny-warnings --format=agent typescript/src typescript/test",
+    "format": "oxfmt --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.11.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "oxfmt": "0.78.0",
+    "oxlint": "1.93.0",
+    "oxlint-tsgolint": "7.0.2006",
+    "typescript": "7.0.2"
+  },
+  "packageManager": "pnpm@10.18.3"
+}

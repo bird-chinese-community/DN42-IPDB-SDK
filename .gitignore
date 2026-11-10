@@ -1,0 +1,14 @@
+.cache/
+.tmp/
+node_modules/
+dist/
+target/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+*.pyc
+python/build/
+python/dist/
+*.tgz

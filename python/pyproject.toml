@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dn42-ipdb"
+version = "0.1.0"
+description = "Local GeoIP2-compatible DN42 intelligence and verified database updates"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "BIRD Chinese Community", email = "sdk.opensouce@birdcc.link" }]
+dependencies = ["maxminddb>=3.0,<4", "httpx>=0.28,<1", "filelock>=3.20,<4"]
+
+[project.urls]
+Repository = "https://github.com/bird-chinese-community/DN42-IPDB-SDK"
+Issues = "https://github.com/bird-chinese-community/DN42-IPDB-SDK/issues"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4",
+  "ruff>=0.14",
+  "mypy>=1.18",
+  "aiohttp>=3.12",
+  "geoip2>=5.1",
+  "semver>=3.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dn42_ipdb"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/LICENSE", "/README.md", "/pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+
+[tool.mypy]
+python_version = "3.14"
+strict = true

@@ -1,0 +1,161 @@
+name: Release SDKs
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing SDK version tag
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
+  artifacts:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      npm_tag: ${{ steps.version.outputs.npm_tag }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      TMPDIR: ${{ github.workspace }}/.cache/tmp
+      GOTMPDIR: ${{ github.workspace }}/.cache/tmp
+      TMP: ${{ github.workspace }}/.cache/tmp
+      TEMP: ${{ github.workspace }}/.cache/tmp
+      CARGO_BUILD_JOBS: 2
+      GOMAXPROCS: 2
+      NODE_OPTIONS: --max-old-space-size=2048
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - run: mkdir -p .cache/tmp
+      - name: Check the publishing ref
+        run: test "$GITHUB_REF" = "refs/tags/$TAG"
+      - uses: ./.github/actions/setup
+      - uses: knope-dev/action@19617851f9f13ab2f27a05989c55efb18aca3675 # v2.1.2
+        with:
+          version: 0.23.2
+      - run: git merge-base --is-ancestor HEAD origin/main
+      - run: pnpm install --frozen-lockfile --ignore-scripts && pnpm build
+      - run: uv sync --frozen --project python --python 3.14
+      - id: version
+        run: uv run --project python python tools/check-release.py "$TAG" >> "$GITHUB_OUTPUT"
+      - name: Check the native version group
+        run: test "v$(knope get-version)" = "$TAG"
+      - name: Build distributions
+        run: |
+          mkdir -p .cache/artifacts/npm .cache/artifacts/python .cache/artifacts/rust
+          (cd typescript && npm pack --pack-destination ../.cache/artifacts/npm)
+          uv build --project python --out-dir .cache/artifacts/python
+          cargo package --manifest-path rust/Cargo.toml --locked
+          cp rust/target/package/*.crate .cache/artifacts/rust/
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: .cache/artifacts/**/*
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: sdk-distributions
+          path: .cache/artifacts/
+      - name: Publish GitHub release and Go module tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/go/$TAG"; then
+            test "$(git rev-parse "go/$TAG^{commit}")" = "$(git rev-parse HEAD)"
+          else
+            git tag "go/$TAG"
+            git push origin "go/$TAG"
+          fi
+          if gh release view "$TAG" --json isDraft >/dev/null 2>&1; then
+            if test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true; then
+              gh release upload "$TAG" --clobber .cache/artifacts/*/*
+              gh release edit "$TAG" --draft=false
+            fi
+          else
+            gh release create "$TAG" --verify-tag --draft --generate-notes .cache/artifacts/*/*
+            gh release edit "$TAG" --draft=false
+          fi
+
+  npm:
+    needs: artifacts
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@latest
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: sdk-distributions
+          path: distributions
+      - run: npm publish distributions/npm/*.tgz --access public --provenance --tag "$DIST_TAG"
+        env:
+          DIST_TAG: ${{ needs.artifacts.outputs.npm_tag }}
+
+  pypi:
+    needs: artifacts
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: sdk-distributions
+          path: distributions
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
+        with:
+          packages-dir: distributions/python
+          skip-existing: true
+          attestations: true
+
+  crates:
+    needs: artifacts
+    runs-on: ubuntu-latest
+    environment: crates
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TMPDIR: ${{ github.workspace }}/.cache/tmp
+      TMP: ${{ github.workspace }}/.cache/tmp
+      TEMP: ${{ github.workspace }}/.cache/tmp
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.artifacts.outputs.tag }}
+      - run: mkdir -p .cache/tmp
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      - run: cargo publish --manifest-path rust/Cargo.toml --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

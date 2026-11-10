@@ -1,0 +1,23 @@
+[package]
+versioned_files = [
+  "typescript/package.json",
+  "python/pyproject.toml",
+  "rust/Cargo.toml",
+  { path = "rust/Cargo.lock", dependency = "dn42-ipdb" },
+  "go/go.mod",
+]
+changelog = "CHANGELOG.md"
+
+[[workflows]]
+name = "prepare-release"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+allow_empty = true
+
+[[workflows]]
+name = "get-version"
+
+[[workflows.steps]]
+type = "Command"
+command = "echo \"$version\""
