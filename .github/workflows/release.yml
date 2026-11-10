@@ -75,6 +75,8 @@ jobs:
         with:
           name: sdk-distributions
           path: .cache/artifacts/
+          include-hidden-files: true
+          if-no-files-found: error
       - name: Publish GitHub release and Go module tag
         env:
           GH_TOKEN: ${{ github.token }}
