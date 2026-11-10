@@ -47,7 +47,7 @@ jobs:
           if ! git describe --tags --match 'v[0-9]*' --abbrev=0 >/dev/null 2>&1 && test -z "$VERSION_OVERRIDE"; then exit 0; fi
           if test -n "$VERSION_OVERRIDE"; then knope prepare-release --override-version "$VERSION_OVERRIDE"; else knope prepare-release; fi
           pnpm install --frozen-lockfile --ignore-scripts
-          pnpm exec oxfmt typescript/package.json
+          pnpm exec oxfmt typescript/package.json CHANGELOG.md
           uv lock --project python
           if ! git diff --quiet HEAD; then echo 'changed=true' >> "$GITHUB_OUTPUT"; fi
       - if: steps.prepare.outputs.changed == 'true'
