@@ -31,4 +31,22 @@ task cancellation stops pending downloads. Each database or JSON sidecar is
 limited to 32 MiB; the checksum manifest to 64 KiB. The Python cache lives
 under `cache_dir/python`.
 
+The SDK reads verified bytes with MaxMind's pure Python `MODE_FD` reader.
+The official `geoip2` typed reader also supports the bundle. Use its memory
+mode on Windows with `maxminddb` 3.2.0:
+
+```python
+from geoip2.database import Reader
+from maxminddb import MODE_MEMORY
+
+with Reader("asn.mmdb", mode=MODE_MEMORY) as database:
+    print(database.asn("172.23.33.0").autonomous_system_number)
+```
+
+The 3.2.0 Windows C extension can decode DN42's unsigned ASN values as
+negative numbers. The [upstream correction](https://github.com/maxmind/MaxMind-DB-Reader-python/commit/51791b8b5d970f92dc7c5fa645bde2c7bd15475d)
+is on its development branch. SDK CI validates all four official GeoIP2 typed
+methods in memory mode on every platform, and its default mode on Linux and
+macOS.
+
 Copyright 2026 BIRD Chinese Community. MIT license.
