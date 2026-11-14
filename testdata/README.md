@@ -6,7 +6,7 @@ location, a DE registration country, and explicit observation examples.
 They exercise GeoIP2 country, city, ASN and connection-type reader APIs and
 the DN42 schema version 2 extension. They contain no measured host evidence.
 
-The generator's standard exporter produced the fixtures on 2026-11-10.
+The generator's standard exporter produced the fixtures on 2026-11-14.
 The six data files are copied into the Go, Python and Rust package tests so
 their source archives can run independently. The CI contract check compares
 these copies with this directory by SHA-256.

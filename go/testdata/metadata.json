@@ -3,8 +3,19 @@
     {
       "license": "Unicode-3.0",
       "license_file": "LICENSE-Unicode.txt",
-      "name": "Unicode CLDR English names",
+      "name": "Unicode CLDR English subdivision names",
       "source": "https://github.com/unicode-org/cldr-json/tree/7d2b9cb11cec08f4d333ad73209deb3df0711c3b"
+    },
+    {
+      "license": "Unicode-3.0",
+      "license_file": "LICENSE-Unicode.txt",
+      "name": "Unicode CLDR English country names through golang.org/x/text v0.33.0",
+      "source": "https://github.com/golang/text/tree/v0.33.0/language/display"
+    },
+    {
+      "license": "CC-BY-4.0",
+      "name": "GeoNames cities with at least 5000 inhabitants (city coordinates and time zones)",
+      "source": "https://download.geonames.org/export/dump/cities5000.zip"
     }
   ],
   "built_at": "2023-11-14T22:13:20Z",
@@ -26,11 +37,13 @@
   "release_repository": "https://github.com/bird-chinese-community/DN42-IPDB-Releases",
   "schema_version": "2",
   "semantics": {
+    "asn_index": "Country entries summarize registration claims of member allocations. Network types summarize scoped observations of member networks, not a classification of the entire ASN.",
     "connection_type": "Explicit access classification only; absent when unknown. Overlay tunnels do not identify subscriber access technology.",
-    "location": "Operator-authorized GeoFeed claim; registry registration country is separate.",
+    "irr_status": "Registry route-object match for irr_prefix. Host overlays retain the original validation prefix.",
+    "location": "Operator-authorized GeoFeed claim, else the origin country from DN42 BGP communities or ICMP latency, named by confidence; registry registration country is separate. City coordinates come from GeoNames.",
     "network_types": "Published service roles or observed BGP path characteristics; method and source describe the evidence.",
     "ptr": "Reverse DNS observations apply only to their queried host address.",
-    "roa_status": "Registry-derived DN42 origin policy; method and origin ASN are attached to each observation. No cryptographic RPKI validation is implied."
+    "roa_status": "Registry-derived DN42 origin policy for roa_prefix; method and origin ASN are attached to each observation. No cryptographic RPKI validation is implied."
   },
   "source_documents": []
 }
