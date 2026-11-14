@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 (2026-11-14)
+
+### Features
+
+- type every origin of a prefix
+
 ## 0.2.0 (2026-11-10)
 
 ### Breaking Changes
