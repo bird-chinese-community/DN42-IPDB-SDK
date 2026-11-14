@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 (2026-11-14)
+
+### Features
+
+- type the registry source of a prefix
+
 ## 0.2.1 (2026-11-14)
 
 ### Features
