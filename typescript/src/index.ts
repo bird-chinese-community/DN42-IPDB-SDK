@@ -113,6 +113,8 @@ export interface Dn42Metadata {
   /** Every origin; releases before origins were published omit it. */
   origins?: Origin[];
   connection_type?: string;
+  /** source: attribute of the prefix's Registry object: DN42, ICVPN, CHAOSVPN, NEONETWORK or CRXN. */
+  registry_source?: string;
   confidence?: string;
   schema_version: string;
   prefix: string;
