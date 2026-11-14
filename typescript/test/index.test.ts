@@ -110,6 +110,9 @@ await test("reads IPv4, IPv6, ASN index, GeoIP2 names and DN42 evidence locally"
       const result = database.lookup(ip);
       assert.equal(result.records.asn?.data.autonomous_system_number, 4242420001);
       assert.equal(result.records.city?.data.dn42?.schema_version, "2");
+      assert.deepEqual(result.records.city?.data.dn42?.origins, [
+        { asn: 4242420001, as_name: "TestNetwork" },
+      ]);
       assert.equal(result.records.city?.data.country?.names?.en, "United States");
     }
     assert.equal(database.lookupAsn(4242420001)?.asn, 4242420001);

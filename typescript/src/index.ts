@@ -56,6 +56,11 @@ export interface Observation {
   authority: string;
   observed_at: string;
 }
+/** An AS that announces the prefix or is listed in its Registry route object. */
+export interface Origin {
+  asn: number;
+  as_name?: string;
+}
 export interface Evidence {
   kind: string;
   source: string;
@@ -102,8 +107,11 @@ export interface PtrHints {
   names: PtrNameHint[];
 }
 export interface Dn42Metadata {
+  /** Present when the prefix has exactly one origin. */
   asn?: number;
   as_name?: string;
+  /** Every origin; releases before origins were published omit it. */
+  origins?: Origin[];
   connection_type?: string;
   confidence?: string;
   schema_version: string;
