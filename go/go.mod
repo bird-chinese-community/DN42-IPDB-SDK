@@ -1,4 +1,4 @@
-module github.com/bird-chinese-community/DN42-IPDB-SDK/go // v0.2.2
+module github.com/bird-chinese-community/DN42-IPDB-SDK/go // v0.3.0
 
 go 1.26.0
 

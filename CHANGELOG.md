@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 (2026-11-16)
+
+### Breaking Changes
+
+- read the cache lock-free and return verified bundles
+- read the cache lock-free and return verified bundles
+- read the cache lock-free and download with urllib
+- read the cache lock-free and recover damaged caches
+
 ## 0.2.2 (2026-11-14)
 
 ### Features
