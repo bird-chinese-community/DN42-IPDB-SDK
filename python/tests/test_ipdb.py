@@ -1,17 +1,20 @@
 import asyncio
-import hashlib
 import json
-import subprocess
-import sys
-import threading
-from contextlib import contextmanager
+import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import httpx
 import pytest
-from aiohttp import web
 from dn42_ipdb import (
     ARTIFACT_FILES,
+    CacheMissingError,
+    ChecksumMismatchError,
+    Dn42IpdbError,
+    InvalidAddressError,
+    InvalidAsnError,
+    InvalidBundleError,
+    SizeLimitError,
+    asns,
     download_release,
     lookup,
     lookup_asn,
@@ -20,249 +23,365 @@ from dn42_ipdb import (
     open_cached_bundle,
     release_metadata,
 )
-from filelock import Timeout
-
-FIXTURES = Path(__file__).with_name("data")
-
-
-@contextmanager
-def fixture_server():
-    files = {name: (FIXTURES / name).read_bytes() for name in ARTIFACT_FILES}
-    state = {
-        "files": files,
-        "requests": [],
-        "failure": "",
-        "stall": False,
-        "bad_manifest": False,
-        "bad_checksum": False,
-        "redirect": "",
-    }
-    loop = asyncio.new_event_loop()
-
-    async def handle(request):
-        name = request.match_info["name"]
-        state["requests"].append(name)
-        if state["redirect"]:
-            raise web.HTTPFound(state["redirect"])
-        if name == state["failure"]:
-            return web.Response(status=503)
-        if name == "checksums.json":
-            checksums = (
-                {}
-                if state["bad_manifest"]
-                else {
-                    name: hashlib.sha256(data).hexdigest()
-                    for name, data in files.items()
-                }
-            )
-            if state["bad_checksum"]:
-                checksums["DN42-IPDB-City.mmdb"] = "0" * 64
-            return web.json_response(checksums)
-        if state["stall"] and name == "DN42-IPDB-City.mmdb":
-            await asyncio.sleep(10)
-        data = files.get(name)
-        return web.Response(body=data) if data is not None else web.Response(status=404)
-
-    async def start():
-        app = web.Application()
-        app.router.add_get("/{name}", handle)
-        runner = web.AppRunner(app, shutdown_timeout=0.1)
-        await runner.setup()
-        site = web.TCPSite(runner, "127.0.0.1", 0)
-        await site.start()
-        return runner
-
-    thread = threading.Thread(target=loop.run_forever, daemon=True)
-    thread.start()
-    runner = asyncio.run_coroutine_threadsafe(start(), loop).result(5)
-    address = runner.addresses[0]
-    try:
-        yield f"http://127.0.0.1:{address[1]}/", state
-    finally:
-        asyncio.run_coroutine_threadsafe(runner.cleanup(), loop).result(5)
-        loop.call_soon_threadsafe(loop.stop)
-        thread.join(5)
-        loop.close()
+from dn42_ipdb.cache import open_current, read_verified
+from support import EXPECTED_VERSION, FIXTURES
 
 
-def test_v2_cache_initialization(tmp_path):
-    language = tmp_path / "python"
-    language.mkdir()
-    existing = language / "current.json"
-    existing.write_text("existing cache layout")
-    with fixture_server() as (address, _):
-        result = asyncio.run(download_release(tmp_path, base_url=address))
-    assert result["changed"]
-    assert Path(result["directory"]).parent == language / "v2"
-    assert existing.read_text() == "existing cache layout"
-    with open_cached_bundle(tmp_path) as database:
-        assert lookup_asn(database, 4242420001)["asn"] == 4242420001
+def copy_bundle(tmp_path: Path) -> Path:
+    directory = tmp_path / "bundle"
+    shutil.copytree(FIXTURES, directory)
+    return directory
+
+
+def edit_json(path: Path, change) -> None:
+    document = json.loads(path.read_text())
+    change(document)
+    path.write_text(json.dumps(document))
 
 
 def test_local_lookup():
-    with open_bundle(FIXTURES) as database:
-        for address in ["172.20.0.1", "fd42:1234::1"]:
-            result = lookup(database, address)
-            assert (
-                result["records"]["asn"]["data"]["autonomous_system_number"]
-                == 4242420001
-            )
-            assert (
-                result["records"]["city"]["data"]["country"]["names"]["en"]
-                == "United States"
-            )
-            assert result["records"]["city"]["data"]["dn42"]["schema_version"] == "2"
-        assert lookup_asn(database, 4242420001)["asn"] == 4242420001
-        assert lookup_asn(database, 4242420999) is None
-        assert lookup(database, "203.0.113.1")["records"] == {}
-        with pytest.raises(ValueError):
-            lookup(database, "bad-ip")
-        with pytest.raises(ValueError):
-            lookup_asn(database, -1)
-        assert len(metadata(database)) == 4
-        assert "DN42-IPDB-Releases" in release_metadata(database)["release_repository"]
-
-
-def test_download_reuse_and_local_cache(tmp_path):
-    with fixture_server() as (url, state):
-        first = asyncio.run(download_release(tmp_path, base_url=url))
-        assert first["changed"] is True
-        assert len(state["requests"]) == 8
-        second = asyncio.run(download_release(tmp_path, base_url=url))
-        assert second == {"directory": first["directory"], "changed": False}
-        assert len(state["requests"]) == 9
-        with open_cached_bundle(tmp_path) as database:
-            assert lookup_asn(database, 4242420001)["asn"] == 4242420001
-            lookup(database, "172.20.0.1")
-        assert len(state["requests"]) == 9
-
-
-def test_reject_insecure_redirect_before_request(tmp_path):
-    with fixture_server() as (url, state), fixture_server() as (target, target_state):
-        state["redirect"] = f"{target}checksums.json"
-        with pytest.raises(ValueError, match="Insecure release redirect"):
-            asyncio.run(download_release(tmp_path, base_url=url))
-        assert len(state["requests"]) == 1
-        assert target_state["requests"] == []
-
-
-def test_update_failures_preserve_pointer(tmp_path):
-    with fixture_server() as (url, state):
-        asyncio.run(download_release(tmp_path, base_url=url))
-        pointer = tmp_path / "python/v2/current.json"
-        original = pointer.read_bytes()
-        state["files"]["metadata.json"] = json.dumps(
-            {
-                "schema_version": "2",
-                "release_repository": "test",
-                "copyright": "BIRDCC",
-                "revision": 1,
-            }
-        ).encode()
-        state["failure"] = "DN42-IPDB-ASN.mmdb"
-        with pytest.raises(httpx.HTTPStatusError, match="503"):
-            asyncio.run(download_release(tmp_path, base_url=url))
-        assert pointer.read_bytes() == original
-        state["failure"] = ""
-        state["files"]["DN42-IPDB-City.mmdb"] = state["files"]["DN42-IPDB-ASN.mmdb"]
-        with pytest.raises(ValueError, match="expected.*City"):
-            asyncio.run(download_release(tmp_path, base_url=url))
-        assert pointer.read_bytes() == original
-        state["bad_checksum"] = True
-        with pytest.raises(ValueError, match="Checksum mismatch"):
-            asyncio.run(download_release(tmp_path, base_url=url))
-        assert pointer.read_bytes() == original
-        state["bad_manifest"] = True
-        with pytest.raises(ValueError, match="Invalid checksum"):
-            asyncio.run(download_release(tmp_path, base_url=url))
-        assert pointer.read_bytes() == original
-        with open_cached_bundle(tmp_path) as database:
-            assert lookup_asn(database, 4242420001)["asn"] == 4242420001
-
-
-def test_cancel_before_publication(tmp_path):
-    with fixture_server() as (url, state):
-        state["stall"] = True
-
-        async def run():
-            task = asyncio.create_task(download_release(tmp_path, base_url=url))
-            await asyncio.sleep(0.1)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
-        asyncio.run(run())
-        assert not (tmp_path / "python/v2/current.json").exists()
-
-
-def test_retention_with_loaded_reader(tmp_path):
-    with fixture_server() as (url, state):
-        first = asyncio.run(download_release(tmp_path, base_url=url))
-        custom = tmp_path / "python" / "v2" / ("f" * 64)
-        custom.mkdir()
-        (custom / "user.txt").write_text("keep")
-        with open_cached_bundle(tmp_path) as database:
-            for revision in [1, 2, 3]:
-                state["files"]["metadata.json"] = json.dumps(
-                    {
-                        "schema_version": "2",
-                        "release_repository": "test",
-                        "copyright": "BIRDCC",
-                        "revision": revision,
-                    }
-                ).encode()
-                asyncio.run(download_release(tmp_path, base_url=url))
-            assert not Path(first["directory"]).exists()
-            assert (
-                lookup(database, "172.20.0.1")["records"]["city"]["data"]["dn42"][
-                    "schema_version"
-                ]
-                == "2"
-            )
-            assert lookup_asn(database, 4242420001)["asn"] == 4242420001
-        assert (custom / "user.txt").read_text() == "keep"
+    database = open_bundle(FIXTURES)
+    for address in ["172.20.0.1", "fd42:1234::1"]:
+        result = lookup(database, address)
         assert (
-            len(
-                [
-                    entry
-                    for entry in (tmp_path / "python/v2").iterdir()
-                    if len(entry.name) == 64
-                ]
+            result["records"]["asn"]["data"]["autonomous_system_number"] == 4242420001
+        )
+        assert (
+            result["records"]["city"]["data"]["country"]["names"]["en"]
+            == "United States"
+        )
+        assert result["records"]["city"]["data"]["dn42"]["schema_version"] == "2"
+    assert lookup_asn(database, 4242420001)["asn"] == 4242420001
+    assert lookup_asn(database, 4242420999) is None
+    assert lookup(database, "203.0.113.1")["records"] == {}
+    assert len(metadata(database)) == 4
+    assert "DN42-IPDB-Releases" in release_metadata(database)["release_repository"]
+
+
+@pytest.mark.parametrize(
+    ("address", "ip", "network", "prefix_length"),
+    [
+        ("172.20.0.1", "172.20.0.1", "172.20.0.1/32", 32),
+        ("::ffff:172.20.0.1", "172.20.0.1", "172.20.0.1/32", 32),
+        ("::FFFF:AC14:1", "172.20.0.1", "172.20.0.1/32", 32),
+        ("fd42:1234::1", "fd42:1234::1", "fd42:1234::1/128", 128),
+        ("FD42:1234:0:0:0:0:0:1", "fd42:1234::1", "fd42:1234::1/128", 128),
+    ],
+)
+def test_lookup_canonical_address_and_network(address, ip, network, prefix_length):
+    result = lookup(open_bundle(FIXTURES), address)
+    assert result["ip"] == ip
+    for match in result["records"].values():
+        assert match["network"] == network
+        assert match["prefix_length"] == prefix_length
+    assert set(result["records"]) == {"country", "city", "asn", "connection_type"}
+
+
+@pytest.mark.parametrize(
+    "address", ["bad-ip", "", "172.20.0.1%eth0", "fe80::1%eth0", "172.20.0", None, 5]
+)
+def test_lookup_rejects_invalid_address(address):
+    with pytest.raises(InvalidAddressError) as caught:
+        lookup(open_bundle(FIXTURES), address)
+    assert isinstance(caught.value, ValueError)
+    assert isinstance(caught.value, Dn42IpdbError)
+
+
+@pytest.mark.parametrize("asn", [-1, 4294967296, True, 1.0, "4242420001", None])
+def test_lookup_asn_rejects_invalid_asn(asn):
+    with pytest.raises(InvalidAsnError):
+        lookup_asn(open_bundle(FIXTURES), asn)
+
+
+def test_asns_are_ordered(tmp_path):
+    directory = copy_bundle(tmp_path)
+
+    def add(document):
+        template = document["asns"]["4242420001"]
+        for asn in (4242420003, 4242420002):
+            document["asns"][str(asn)] = {**template, "asn": asn}
+
+    edit_json(directory / "asn-index.json", add)
+    records = asns(open_bundle(directory))
+    assert [record["asn"] for record in records] == [
+        4242420001,
+        4242420002,
+        4242420003,
+    ]
+    assert [record["asn"] for record in asns(open_bundle(FIXTURES))] == [4242420001]
+
+
+def test_release_metadata_typed_field(tmp_path):
+    directory = copy_bundle(tmp_path)
+    window = {"first": "2026-11-15T07:43:11Z", "last": "2026-11-15T10:59:05Z"}
+    edit_json(
+        directory / "metadata.json",
+        lambda doc: doc.update(release_tag="v9", route_observed_at=window),
+    )
+    release = release_metadata(open_bundle(directory))
+    assert release["release_tag"] == "v9"
+    assert release["route_observed_at"] == window
+    assert release["schema_version"] == "2"
+    assert "release_tag" not in release_metadata(open_bundle(FIXTURES))
+
+
+def break_schema(document):
+    document["schema_version"] = "1"
+
+
+def break_database_types(document):
+    document["database_types"]["DN42-IPDB-City.mmdb"] = "DN42-GeoIP2-Country"
+
+
+def break_asn_key(document):
+    document["asns"]["4242420002"] = document["asns"].pop("4242420001")
+
+
+def break_asn_info(document):
+    del document["asns"]["4242420001"]["prefixes"]
+
+
+def break_observation(document):
+    document["asns"]["4242420001"]["observations"] = [{"target": "x"}]
+
+
+def break_repository(document):
+    document["release_repository"] = ""
+
+
+def null_as_name(document):
+    document["asns"]["4242420001"]["as_name"] = None
+
+
+def null_observation_asn(document):
+    document["asns"]["4242420001"]["observations"][0]["asn"] = None
+
+
+def null_observation_value(document):
+    document["asns"]["4242420001"]["observations"][1]["value"] = None
+
+
+def null_metadata_field(key):
+    def change(document):
+        document[key] = None
+
+    return change
+
+
+@pytest.mark.parametrize(
+    ("file", "change"),
+    [
+        ("metadata.json", break_schema),
+        ("metadata.json", break_database_types),
+        ("metadata.json", break_repository),
+        ("asn-index.json", break_asn_key),
+        ("asn-index.json", break_asn_info),
+        ("asn-index.json", break_observation),
+        ("asn-index.json", null_as_name),
+        ("asn-index.json", null_observation_asn),
+        ("asn-index.json", null_observation_value),
+        *[
+            ("metadata.json", null_metadata_field(key))
+            for key in (
+                "release_tag",
+                "release_url",
+                "built_at",
+                "registry_commit",
+                "registry_committed_at",
+                "route_observed_at",
+                "database_types",
             )
-            == 3
-        )
+        ],
+    ],
+)
+def test_invalid_json_sidecars(tmp_path, file, change):
+    directory = copy_bundle(tmp_path)
+    edit_json(directory / file, change)
+    with pytest.raises(InvalidBundleError) as caught:
+        open_bundle(directory)
+    assert caught.value.file == file
 
 
-def test_cross_process_lock(tmp_path):
-    with fixture_server() as (url, _):
-        asyncio.run(download_release(tmp_path, base_url=url))
-        child = subprocess.Popen(
-            [
-                sys.executable,
-                str(Path(__file__).with_name("hold_lock.py")),
-                str(tmp_path / "python/v2"),
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            text=True,
-        )
-        try:
-            assert child.stdout.readline() == "locked\n"
-            with pytest.raises(Timeout), open_cached_bundle(tmp_path):
-                pass
-            with pytest.raises(TimeoutError):
-                asyncio.run(download_release(tmp_path, base_url=url, timeout=0.1))
-        finally:
-            child.communicate("x", timeout=5)
-        assert child.returncode == 0
+def test_invalid_bundle_files(tmp_path):
+    directory = copy_bundle(tmp_path)
+    (directory / "LICENSE-Unicode.txt").unlink()
+    with pytest.raises(InvalidBundleError) as missing:
+        open_bundle(directory)
+    assert missing.value.file == "LICENSE-Unicode.txt"
+    directory = copy_bundle(tmp_path / "other")
+    (directory / "DN42-IPDB-City.mmdb").write_bytes(b"not a database")
+    with pytest.raises(InvalidBundleError) as garbage:
+        open_bundle(directory)
+    assert garbage.value.file == "DN42-IPDB-City.mmdb"
+    shutil.copy(directory / "DN42-IPDB-ASN.mmdb", directory / "DN42-IPDB-City.mmdb")
+    with pytest.raises(InvalidBundleError) as wrong_type:
+        open_bundle(directory)
+    assert wrong_type.value.file == "DN42-IPDB-City.mmdb"
+    (directory / "metadata.json").write_text("{")
+    with pytest.raises(InvalidBundleError):
+        open_bundle(directory)
 
 
-def test_recover_malformed_pointer(tmp_path):
-    with fixture_server() as (url, _):
-        asyncio.run(download_release(tmp_path, base_url=url))
-        (tmp_path / "python/v2/current.json").write_text("{")
-        result = asyncio.run(download_release(tmp_path, base_url=url))
-        assert result["changed"] is True
-        assert result["recovered_cache"] is True
-        with open_cached_bundle(tmp_path) as database:
-            assert lookup_asn(database, 4242420001)["asn"] == 4242420001
+def test_size_limit_and_special_files(tmp_path):
+    directory = copy_bundle(tmp_path)
+    (directory / "metadata.json").write_bytes(b" " * (1024 * 1024 + 1))
+    with pytest.raises(SizeLimitError):
+        open_bundle(directory)
+    (directory / "metadata.json").unlink()
+    (directory / "metadata.json").mkdir()
+    with pytest.raises(InvalidBundleError):
+        open_bundle(directory)
+
+
+def test_download_then_open_cached(tmp_path, server):
+    url, _ = server
+    result = asyncio.run(download_release(tmp_path, base_url=url))
+    assert Path(result["directory"]).name == EXPECTED_VERSION
+    database = open_cached_bundle(tmp_path)
+    assert lookup_asn(database, 4242420001)["asn"] == 4242420001
+    assert {path.name for path in Path(result["directory"]).iterdir()} == set(
+        ARTIFACT_FILES
+    )
+
+
+def test_cache_missing(tmp_path):
+    with pytest.raises(CacheMissingError) as caught:
+        open_cached_bundle(tmp_path)
+    assert isinstance(caught.value, FileNotFoundError)
+    assert "current.json" in str(caught.value)
+
+
+def test_open_cached_accepts_any_hex_version(tmp_path, server):
+    url, _ = server
+    result = asyncio.run(download_release(tmp_path, base_url=url))
+    cache = tmp_path / "python/v2"
+    old = "b" * 64
+    Path(result["directory"]).rename(cache / old)
+    edit_json(cache / "current.json", lambda doc: doc.update(version=old))
+    assert lookup_asn(open_cached_bundle(tmp_path), 4242420001) is not None
+
+
+def test_concurrent_open_cached(tmp_path, server):
+    url, _ = server
+    asyncio.run(download_release(tmp_path, base_url=url))
+    with ThreadPoolExecutor(4) as pool:
+        bundles = list(pool.map(lambda _: open_cached_bundle(tmp_path), range(8)))
+    assert all(lookup_asn(item, 4242420001) for item in bundles)
+
+
+def test_open_cached_checksum_mismatch(tmp_path, server):
+    url, _ = server
+    result = asyncio.run(download_release(tmp_path, base_url=url))
+    target = Path(result["directory"]) / "DN42-IPDB-City.mmdb"
+    target.write_bytes(target.read_bytes() + b"x")
+    with pytest.raises(ChecksumMismatchError) as caught:
+        open_cached_bundle(tmp_path)
+    assert caught.value.file == "DN42-IPDB-City.mmdb"
+    assert isinstance(caught.value, InvalidBundleError)
+    target.unlink()
+    with pytest.raises(InvalidBundleError) as missing:
+        open_cached_bundle(tmp_path)
+    assert missing.value.file == "DN42-IPDB-City.mmdb"
+    assert isinstance(missing.value.__cause__, FileNotFoundError)
+    assert not isinstance(missing.value, CacheMissingError)
+
+
+def test_open_cached_missing_version_directory(tmp_path, server):
+    url, _ = server
+    result = asyncio.run(download_release(tmp_path, base_url=url))
+    shutil.rmtree(result["directory"])
+    with pytest.raises(InvalidBundleError) as missing:
+        open_cached_bundle(tmp_path)
+    assert isinstance(missing.value.__cause__, FileNotFoundError)
+
+
+@pytest.mark.parametrize(
+    "checksums", [{}, {name: "xyz" for name in ARTIFACT_FILES}], ids=["empty", "short"]
+)
+def test_invalid_pointer_checksums_name_the_pointer(tmp_path, server, checksums):
+    url, _ = server
+    asyncio.run(download_release(tmp_path, base_url=url))
+    cache = tmp_path / "python/v2"
+    edit_json(cache / "current.json", lambda doc: doc.update(checksums=checksums))
+    with pytest.raises(InvalidBundleError) as caught:
+        open_cached_bundle(tmp_path)
+    assert caught.value.file == "current.json"
+    assert not isinstance(caught.value, CacheMissingError)
+
+
+def test_open_cached_retries_when_pointer_moves(tmp_path, server):
+    url, _ = server
+    result = asyncio.run(download_release(tmp_path, base_url=url))
+    cache = tmp_path / "python/v2"
+    good = (cache / "current.json").read_text()
+    missing = json.loads(good)
+    missing["version"] = "a" * 64
+    (cache / "current.json").write_text(json.dumps(missing))
+    attempts = []
+
+    def read(directory, checksums):
+        attempts.append(directory.name)
+        if len(attempts) == 1:
+            (cache / "current.json").write_text(good)
+        return read_verified(directory, checksums)
+
+    database = open_current(cache, read)
+    assert attempts == ["a" * 64, Path(result["directory"]).name]
+    assert lookup_asn(database, 4242420001) is not None
+
+
+def test_open_cached_gives_up_without_a_moved_pointer(tmp_path, server):
+    url, _ = server
+    asyncio.run(download_release(tmp_path, base_url=url))
+    cache = tmp_path / "python/v2"
+    pointer = json.loads((cache / "current.json").read_text())
+    pointer["version"] = "a" * 64
+    (cache / "current.json").write_text(json.dumps(pointer))
+    attempts = []
+
+    def read(directory, checksums):
+        attempts.append(directory.name)
+        return read_verified(directory, checksums)
+
+    with pytest.raises(InvalidBundleError) as caught:
+        open_current(cache, read)
+    assert isinstance(caught.value.__cause__, FileNotFoundError)
+    assert len(attempts) == 1
+
+
+def test_open_cached_does_not_retry_other_invalid_bundles(tmp_path, server):
+    url, _ = server
+    asyncio.run(download_release(tmp_path, base_url=url))
+    cache = tmp_path / "python/v2"
+    attempts = []
+
+    def read(directory, checksums):
+        attempts.append(directory.name)
+        edit_json(cache / "current.json", lambda doc: doc.update(version="c" * 64))
+        raise InvalidBundleError("metadata.json", "broken")
+
+    with pytest.raises(InvalidBundleError) as caught:
+        open_current(cache, read)
+    assert caught.value.file == "metadata.json"
+    assert len(attempts) == 1
+
+
+def test_open_cached_stops_after_three_attempts(tmp_path, server):
+    url, _ = server
+    asyncio.run(download_release(tmp_path, base_url=url))
+    cache = tmp_path / "python/v2"
+    pointer = json.loads((cache / "current.json").read_text())
+    pointer["version"] = "9" * 64
+    (cache / "current.json").write_text(json.dumps(pointer))
+    attempts = []
+
+    def read(directory, checksums):
+        attempts.append(directory.name)
+        pointer["version"] = chr(ord("a") + len(attempts)) * 64
+        (cache / "current.json").write_text(json.dumps(pointer))
+        return read_verified(directory, checksums)
+
+    with pytest.raises(InvalidBundleError) as caught:
+        open_current(cache, read)
+    assert isinstance(caught.value.__cause__, FileNotFoundError)
+    assert len(attempts) == 3

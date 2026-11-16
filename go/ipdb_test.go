@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,10 +18,13 @@ import (
 	"github.com/gofrs/flock"
 )
 
+// fixtureVersion is the content-addressed version of the shared fixtures.
+const fixtureVersion = "ac95640bbd1d1c9d3f75239dbf7fd242b0c5f8fb5aa5332480220c904a22c157"
+
 func fixtureFiles(t *testing.T) map[string][]byte {
 	t.Helper()
 	files := make(map[string][]byte)
-	for _, file := range artifactFiles() {
+	for _, file := range bundleFiles {
 		data, err := os.ReadFile(filepath.Join("testdata", file))
 		if err != nil {
 			t.Fatal(err)
@@ -28,6 +32,35 @@ func fixtureFiles(t *testing.T) map[string][]byte {
 		files[file] = data
 	}
 	return files
+}
+
+// copyBundle writes the fixtures, after mutate edited them, to a new directory.
+func copyBundle(t *testing.T, mutate func(files map[string][]byte)) string {
+	t.Helper()
+	files := fixtureFiles(t)
+	mutate(files)
+	directory := t.TempDir()
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(directory, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return directory
+}
+
+// editJSON decodes a JSON object, applies edit and encodes it again.
+func editJSON(t *testing.T, data []byte, edit func(document map[string]any)) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	edit(document)
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func fixtureServer(t *testing.T, files map[string][]byte, requests *int, failure *string) *httptest.Server {
@@ -65,6 +98,22 @@ func fixtureServer(t *testing.T, files map[string][]byte, requests *int, failure
 	return server
 }
 
+// installedCache downloads the fixtures into a new cache and returns its options.
+func installedCache(t *testing.T) DownloadOptions {
+	t.Helper()
+	requests, failure := 0, ""
+	server := fixtureServer(t, fixtureFiles(t), &requests, &failure)
+	options := DownloadOptions{CacheDir: t.TempDir(), BaseURL: server.URL}
+	result, err := Download(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := result.Database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return options
+}
+
 func TestLocalLookup(t *testing.T) {
 	db, err := Open("testdata")
 	if err != nil {
@@ -83,8 +132,12 @@ func TestLocalLookup(t *testing.T) {
 			t.Fatalf("missing records: %#v", result)
 		}
 	}
-	if _, found := db.LookupASN(4242420001); !found {
-		t.Fatal("missing ASN index record")
+	info, found := db.LookupASN(4242420001)
+	if !found || info.ASN != 4242420001 || info.AsName == nil || *info.AsName != "TestNetwork" {
+		t.Fatalf("ASN index record: %#v %v", info, found)
+	}
+	if len(info.Observations) == 0 || len(info.RegisteredCountries) != 1 || info.RegisteredCountries[0].ISOCode != "DE" {
+		t.Fatalf("typed ASN record: %#v", info)
 	}
 	if _, found := db.LookupASN(4242420999); found {
 		t.Fatal("unexpected ASN index record")
@@ -93,14 +146,15 @@ func TestLocalLookup(t *testing.T) {
 	if err != nil || len(missing.Records) != 0 {
 		t.Fatalf("missing lookup: %v %#v", err, missing)
 	}
-	if _, err := db.Lookup("bad-ip"); err == nil {
-		t.Fatal("invalid IP accepted")
+	if _, err := db.Lookup("bad-ip"); !errors.Is(err, ErrInvalidAddress) {
+		t.Fatalf("invalid IP accepted: %v", err)
 	}
 	if len(db.Metadata()) != 4 {
 		t.Fatal("missing metadata")
 	}
-	if !strings.Contains(fmt.Sprint(db.ReleaseMetadata()["release_repository"]), "DN42-IPDB-Releases") {
-		t.Fatal("missing release repository")
+	release := db.ReleaseMetadata()
+	if !strings.Contains(release.ReleaseRepository, "DN42-IPDB-Releases") || release.SchemaVersion != "2" || release.Raw["generator"] != "DN42-IPDB" {
+		t.Fatalf("release metadata: %#v", release)
 	}
 }
 
@@ -116,6 +170,7 @@ func TestDownloadReuseAndFailures(t *testing.T) {
 	if !first.Changed || requests != 8 {
 		t.Fatalf("first install: %#v requests=%d", first, requests)
 	}
+	_ = first.Database.Close()
 	second, err := Download(context.Background(), options)
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +178,7 @@ func TestDownloadReuseAndFailures(t *testing.T) {
 	if second.Changed || second.Directory != first.Directory || requests != 9 {
 		t.Fatalf("cache reuse: %#v requests=%d", second, requests)
 	}
+	_ = second.Database.Close()
 	db, err := OpenCached(options.CacheDir)
 	if err != nil {
 		t.Fatal(err)
@@ -134,23 +190,23 @@ func TestDownloadReuseAndFailures(t *testing.T) {
 	if requests != 9 {
 		t.Fatal("local lookup made a request")
 	}
-	pointerPath := filepath.Join(options.CacheDir, "go", "v2", "current.json")
+	pointerPath := filepath.Join(cacheDirectory(options.CacheDir), "current.json")
 	original, err := os.ReadFile(pointerPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	files["metadata.json"] = []byte(`{"schema_version":"2","release_repository":"test","copyright":"BIRDCC","revision":1}`)
 	failure = "DN42-IPDB-ASN.mmdb"
-	if _, err := Download(context.Background(), options); err == nil {
-		t.Fatal("partial download accepted")
+	if _, err := Download(context.Background(), options); !errors.Is(err, ErrHTTPStatus) {
+		t.Fatalf("partial download accepted: %v", err)
 	}
 	failure = ""
 	files["DN42-IPDB-City.mmdb"] = files["DN42-IPDB-ASN.mmdb"]
-	if _, err := Download(context.Background(), options); err == nil || !strings.Contains(err.Error(), "City") {
+	if _, err := Download(context.Background(), options); !errors.Is(err, ErrInvalidBundle) || !strings.Contains(err.Error(), "City") {
 		t.Fatalf("wrong database accepted: %v", err)
 	}
 	failure = "checksum"
-	if _, err := Download(context.Background(), options); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+	if _, err := Download(context.Background(), options); !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("wrong checksum accepted: %v", err)
 	}
 	current, err := os.ReadFile(pointerPath)
@@ -179,11 +235,16 @@ func TestCancellation(t *testing.T) {
 	cache := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if _, err := Download(ctx, DownloadOptions{CacheDir: cache, BaseURL: server.URL}); err == nil {
-		t.Fatal("cancelled download succeeded")
+	if _, err := Download(ctx, DownloadOptions{CacheDir: cache, BaseURL: server.URL}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline error, got %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(cache, "go", "v2", "current.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(cacheDirectory(cache), "current.json")); !os.IsNotExist(err) {
 		t.Fatalf("unexpected pointer: %v", err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	if _, err := Download(ctx, DownloadOptions{CacheDir: cache, BaseURL: server.URL, Timeout: time.Minute}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected cancellation error, got %v", err)
 	}
 }
 
@@ -196,12 +257,13 @@ func TestRetentionAndIndependentReaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_ = first.Database.Close()
 	db, err := OpenCached(options.CacheDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	custom := filepath.Join(options.CacheDir, "go", "v2", strings.Repeat("f", 64))
+	custom := filepath.Join(cacheDirectory(options.CacheDir), strings.Repeat("f", 64))
 	if err := os.Mkdir(custom, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -210,11 +272,13 @@ func TestRetentionAndIndependentReaders(t *testing.T) {
 	}
 	for revision := 1; revision <= 3; revision++ {
 		files["metadata.json"] = []byte(fmt.Sprintf(`{"schema_version":"2","release_repository":"test","copyright":"BIRDCC","revision":%d}`, revision))
-		if _, err := Download(context.Background(), options); err != nil {
+		update, err := Download(context.Background(), options)
+		if err != nil {
 			t.Fatal(err)
 		}
+		_ = update.Database.Close()
 	}
-	entries, err := os.ReadDir(filepath.Join(options.CacheDir, "go", "v2"))
+	entries, err := os.ReadDir(cacheDirectory(options.CacheDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,16 +320,18 @@ func TestCrossProcessLock(t *testing.T) {
 	files := fixtureFiles(t)
 	requests, failure := 0, ""
 	server := fixtureServer(t, files, &requests, &failure)
-	options := DownloadOptions{CacheDir: t.TempDir(), BaseURL: server.URL, Timeout: 50 * time.Millisecond}
-	if _, err := Download(context.Background(), options); err != nil {
+	options := DownloadOptions{CacheDir: t.TempDir(), BaseURL: server.URL, Timeout: 100 * time.Millisecond}
+	first, err := Download(context.Background(), options)
+	if err != nil {
 		t.Fatal(err)
 	}
+	_ = first.Database.Close()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	child := exec.Command(executable, "-test.run=^TestHoldCacheLock$")
-	child.Env = append(os.Environ(), "DN42_LOCK_CACHE="+filepath.Join(options.CacheDir, "go", "v2"))
+	child.Env = append(os.Environ(), "DN42_LOCK_CACHE="+cacheDirectory(options.CacheDir))
 	stdout, err := child.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -287,11 +353,13 @@ func TestCrossProcessLock(t *testing.T) {
 	if err != nil || line != "locked\n" {
 		t.Fatalf("child lock: %q %v", line, err)
 	}
-	if _, err := OpenCached(options.CacheDir); err == nil {
-		t.Fatal("cached open ignored lock")
+	reader, err := OpenCached(options.CacheDir)
+	if err != nil {
+		t.Fatalf("readers must not take the writer lock: %v", err)
 	}
-	if _, err := Download(context.Background(), options); err == nil {
-		t.Fatal("download ignored lock")
+	_ = reader.Close()
+	if _, err := Download(context.Background(), options); !errors.Is(err, ErrLockTimeout) {
+		t.Fatalf("download ignored lock: %v", err)
 	}
 }
 
@@ -312,6 +380,7 @@ func TestV2CacheInitialization(t *testing.T) {
 	if err != nil || !result.Changed || filepath.Dir(result.Directory) != filepath.Join(language, "v2") {
 		t.Fatalf("v2 activation: %#v, %v", result, err)
 	}
+	_ = result.Database.Close()
 	data, err := os.ReadFile(existing)
 	if err != nil || string(data) != "existing cache layout" {
 		t.Fatalf("existing cache: %q, %v", data, err)
@@ -327,14 +396,8 @@ func TestV2CacheInitialization(t *testing.T) {
 }
 
 func TestRecoverMalformedPointer(t *testing.T) {
-	files := fixtureFiles(t)
-	requests, failure := 0, ""
-	server := fixtureServer(t, files, &requests, &failure)
-	options := DownloadOptions{CacheDir: t.TempDir(), BaseURL: server.URL}
-	if _, err := Download(context.Background(), options); err != nil {
-		t.Fatal(err)
-	}
-	pointerPath := filepath.Join(options.CacheDir, "go", "v2", "current.json")
+	options := installedCache(t)
+	pointerPath := filepath.Join(cacheDirectory(options.CacheDir), "current.json")
 	if err := os.WriteFile(pointerPath, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -342,6 +405,7 @@ func TestRecoverMalformedPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer result.Database.Close()
 	if !result.Changed || !result.RecoveredCache {
 		t.Fatalf("cache recovery was not reported: %#v", result)
 	}

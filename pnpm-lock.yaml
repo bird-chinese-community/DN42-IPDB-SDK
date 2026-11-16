@@ -29,6 +29,9 @@ importers:
 
   typescript:
     dependencies:
+      ipaddr.js:
+        specifier: ^2.5.0
+        version: 2.5.0
       maxmind:
         specifier: ^5.0.8
         version: 5.0.8
@@ -431,6 +434,10 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
+  ipaddr.js@2.5.0:
+    resolution: {integrity: sha512-aq+t5NAc+cS6rZQQVWC2x98CPqGtKKTMDd4Gaodv0wShnItdKg/51djkGJ1hqH+Oy0ivDftCbSLCQob8zso01w==}
+    engines: {node: '>= 10'}
+
   maxmind@5.0.8:
     resolution: {integrity: sha512-M8iv2u1rZG27NiJGYO4q2JUCafvenr8KGUyCkQxh4nMrSLu+tUNGeoX0Ys6FjGRSw6cof5ED1+/003zzPBkfjw==}
     engines: {node: '>=12', npm: '>=6'}
@@ -706,6 +713,8 @@ snapshots:
     optional: true
 
   graceful-fs@4.2.11: {}
+
+  ipaddr.js@2.5.0: {}
 
   maxmind@5.0.8:
     dependencies:

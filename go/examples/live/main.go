@@ -31,10 +31,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	database, err := ipdb.OpenCached(os.Args[1])
-	if err != nil {
-		return err
-	}
+	database := update.Database
 	defer database.Close()
 	ip, err := database.Lookup("172.23.33.0")
 	if err != nil {
@@ -45,7 +42,7 @@ func run() error {
 		return errors.New("public ASN lookup did not match the release contract")
 	}
 	asn, found := database.LookupASN(4242420803)
-	if !found || database.ReleaseMetadata()["schema_version"] != "2" {
+	if !found || database.ReleaseMetadata().SchemaVersion != "2" {
 		return errors.New("public sidecars did not match the release contract")
 	}
 	return json.NewEncoder(os.Stdout).Encode(map[string]any{
