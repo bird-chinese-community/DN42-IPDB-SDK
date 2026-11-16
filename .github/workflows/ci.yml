@@ -40,6 +40,27 @@ jobs:
           node-version: 20.18.3
       - run: node --test .cache/typescript-runtime-tests/typescript/test/*.test.js
 
+  minimum-python:
+    name: Python 3.12 runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TMPDIR: ${{ github.workspace }}/.cache/tmp
+      TMP: ${{ github.workspace }}/.cache/tmp
+      TEMP: ${{ github.workspace }}/.cache/tmp
+      UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.cache/python-3.12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - run: mkdir -p .cache/tmp
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: 0.11.26
+          enable-cache: true
+          cache-dependency-glob: python/uv.lock
+      - run: uv run --frozen --project python --python 3.12 pytest python/tests
+
   sdk:
     name: SDK (${{ matrix.os }})
     strategy:
