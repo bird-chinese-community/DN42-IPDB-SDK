@@ -4,7 +4,7 @@ Local IP and ASN lookup for the [BIRDCC DN42 IPDB releases](https://github.com/b
 
 ```toml
 [dependencies]
-dn42-ipdb = "0.3"
+dn42-ipdb = "0.4"
 ```
 
 ```rust,no_run
@@ -68,6 +68,11 @@ HTTPS, or HTTP to the same loopback host and port as the base URL, and carry no
 credentials (including an empty `@` user info) and no fragment. A redirect target may
 have a query.
 
+Requests use ureq with rustls on ring and the Mozilla root certificates from
+`webpki-roots`, so builds need no system TLS library or platform SDK. Proxies come from
+`ALL_PROXY`, `HTTPS_PROXY` or `HTTP_PROXY` (or their lowercase forms), and
+`NO_PROXY` lists the hosts reached directly.
+
 The cache lives in `<cache_root>/rust/v2`:
 
 - `current.json` holds the active version and the seven checksums.
@@ -114,7 +119,8 @@ cancelled run.
 `Error` variants: `InvalidUrl`, `InvalidBundle { file, reason, source }`, `ChecksumMismatch { file }`,
 `SizeLimit`, `HttpStatus { url, status }`, `LockTimeout`, `CacheMissing`, `Cancelled`,
 `Timeout`, `InvalidArgument`, and `Io`, `Http` and `Maxmind` with the path, URL or file they
-refer to and the underlying error as source.
+refer to and the underlying error as source. The source of `Http` is a boxed error from the
+HTTP client.
 
 ## Checks
 
