@@ -15,17 +15,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use maxminddb::Reader;
-use reqwest::{
-    Url,
-    blocking::{Client, Response},
-    header::LOCATION,
-    redirect::Policy,
-};
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use tempfile::Builder;
 use thiserror::Error;
+use ureq::{
+    Agent, Body,
+    http::{Response, header::LOCATION},
+};
+use url::Url;
 
 pub const DEFAULT_RELEASE_URL: &str =
     "https://github.com/bird-chinese-community/DN42-IPDB-Releases/releases/latest/download/";
@@ -111,7 +110,7 @@ pub enum Error {
     Http {
         url: String,
         #[source]
-        source: reqwest::Error,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error("{file}: MaxMind lookup failed: {source}")]
     Maxmind {
@@ -610,7 +609,7 @@ impl Cache {
     pub fn refresh_with_cancel(&self, cancellation: &Cancellation) -> Result<Update> {
         let deadline = deadline_after(self.timeout)?;
         let _lock = lock_cache(&self.directory, deadline, cancellation)?;
-        let session = Session::new(&self.base_url, deadline, cancellation)?;
+        let session = Session::new(&self.base_url, deadline, cancellation);
         let checksums = session.fetch_checksums()?;
         let (previous, mut recovered_cache) = read_previous(&self.directory)?;
         if let Some(previous) = previous.as_ref().filter(|p| p.checksums == checksums) {
@@ -1019,39 +1018,49 @@ fn check_redirect(raw: &str, url: &Url, base: &Url) -> std::result::Result<(), S
     }
 }
 
-fn request_error(url: &str, error: reqwest::Error) -> Error {
-    if error.is_timeout() {
-        return Error::Timeout;
-    }
-    Error::Http {
-        url: url.to_string(),
-        source: error,
+fn request_error(url: &str, error: ureq::Error) -> Error {
+    match error {
+        ureq::Error::Timeout(_) => Error::Timeout,
+        ureq::Error::Io(error) if error.kind() == io::ErrorKind::TimedOut => Error::Timeout,
+        error => Error::Http {
+            url: url.to_string(),
+            source: Box::new(error),
+        },
     }
 }
 
-/// One refresh run: HTTP client, base URL, deadline and cancellation.
+/// The body reader wraps transport failures such as the deadline in io::Error.
+fn read_error(url: &str, error: io::Error) -> Error {
+    match ureq::Error::from(error) {
+        ureq::Error::Io(error) if error.kind() != io::ErrorKind::TimedOut => Error::io(url)(error),
+        error => request_error(url, error),
+    }
+}
+
+/// One refresh run: HTTP agent, base URL, deadline and cancellation.
 struct Session<'a> {
-    client: Client,
+    agent: Agent,
     base_url: &'a Url,
     deadline: Instant,
     cancellation: &'a Cancellation,
 }
 
 impl<'a> Session<'a> {
-    fn new(base_url: &'a Url, deadline: Instant, cancellation: &'a Cancellation) -> Result<Self> {
-        let client = Client::builder()
-            .redirect(Policy::none())
-            .build()
-            .map_err(|source| Error::Http {
-                url: base_url.to_string(),
-                source,
-            })?;
-        Ok(Self {
-            client,
+    /// The agent takes proxies from the environment, returns every status as a response and
+    /// leaves redirects to `send`.
+    fn new(base_url: &'a Url, deadline: Instant, cancellation: &'a Cancellation) -> Self {
+        let agent = Agent::new_with_config(
+            Agent::config_builder()
+                .http_status_as_error(false)
+                .max_redirects(0)
+                .build(),
+        );
+        Self {
+            agent,
             base_url,
             deadline,
             cancellation,
-        })
+        }
     }
 
     fn check(&self) -> Result<()> {
@@ -1059,15 +1068,19 @@ impl<'a> Session<'a> {
     }
 
     /// Sends a GET request and follows at most ten redirects, validating each raw Location.
-    fn send(&self, first: Url) -> Result<Response> {
+    fn send(&self, first: Url) -> Result<Response<Body>> {
         let mut url = first;
         for _ in 0..=MAX_REDIRECTS {
             self.check()?;
             let response = self
-                .client
-                .get(url.clone())
-                .timeout(self.deadline.saturating_duration_since(Instant::now()))
-                .send()
+                .agent
+                .get(url.as_str())
+                .config()
+                .timeout_global(Some(
+                    self.deadline.saturating_duration_since(Instant::now()),
+                ))
+                .build()
+                .call()
                 .map_err(|error| request_error(url.as_str(), error))?;
             if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
                 return Ok(response);
@@ -1077,7 +1090,7 @@ impl<'a> Session<'a> {
         Err(Error::InvalidUrl(format!("{url}: too many redirects")))
     }
 
-    fn redirect_target(&self, from: &Url, response: &Response) -> Result<Url> {
+    fn redirect_target(&self, from: &Url, response: &Response<Body>) -> Result<Url> {
         let invalid = |reason: String| Error::InvalidUrl(format!("{from}: {reason}"));
         let raw = response
             .headers()
@@ -1099,28 +1112,26 @@ impl<'a> Session<'a> {
             .map_err(|error| Error::InvalidUrl(format!("{name}: {error}")))?;
         let label = url.to_string();
         let limit = file_limit(name);
-        let mut response = self.send(url)?;
+        let response = self.send(url)?;
         let status = response.status().as_u16();
         if status != 200 {
             return Err(Error::HttpStatus { url: label, status });
         }
         if response
+            .body()
             .content_length()
             .is_some_and(|length| length > limit as u64)
         {
             return Err(Error::SizeLimit(label));
         }
+        let mut reader = response.into_body().into_reader();
         let mut bytes = Vec::new();
         let mut chunk = [0u8; 8192];
         loop {
             self.check()?;
-            let count = response.read(&mut chunk).map_err(|error| {
-                if error.kind() == io::ErrorKind::TimedOut {
-                    Error::Timeout
-                } else {
-                    Error::io(&label)(error)
-                }
-            })?;
+            let count = reader
+                .read(&mut chunk)
+                .map_err(|error| read_error(&label, error))?;
             if count == 0 {
                 return Ok(bytes);
             }
